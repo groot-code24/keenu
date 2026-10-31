@@ -257,18 +257,19 @@ END:VCALENDAR
         Save-Settings { param($s) $s | Add-Member -Force clipboard ([pscustomobject]@{ enabled = $true }) }
         $island = Start-Island
         Start-Sleep -Milliseconds 400
-        Set-Clipboard -Value 'copied with history on'
-        Start-Sleep -Milliseconds 600
         Add-Type -AssemblyName System.Windows.Forms
+        # Anyone can hold the clipboard for a moment, and the island reads it after each copy: tries for up to 5 s.
+        [System.Windows.Forms.Clipboard]::SetDataObject('copied with history on', $true, 20, 250)
+        Start-Sleep -Milliseconds 600
         $private = New-Object System.Windows.Forms.DataObject
         $private.SetText('hunter2-private')
         $private.SetData('ExcludeClipboardContentFromMonitorProcessing', $true, (New-Object IO.MemoryStream(,[byte[]](1, 0, 0, 0))))
-        [System.Windows.Forms.Clipboard]::SetDataObject($private, $true)
+        [System.Windows.Forms.Clipboard]::SetDataObject($private, $true, 20, 250)
         Start-Sleep -Milliseconds 600
         $marked = New-Object System.Windows.Forms.DataObject
         $marked.SetText('hunter3-not-in-history')
         $marked.SetData('CanIncludeInClipboardHistory', $false, (New-Object IO.MemoryStream(,[byte[]](0, 0, 0, 0))))
-        [System.Windows.Forms.Clipboard]::SetDataObject($marked, $true)
+        [System.Windows.Forms.Clipboard]::SetDataObject($marked, $true, 20, 250)
         Start-Sleep -Milliseconds 600
         Check 'the island survives the clipboard' (Stop-Island $island)
         $history = Invoke-Keenu @('--clipboard-history-list')
