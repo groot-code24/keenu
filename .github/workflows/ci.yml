@@ -43,7 +43,8 @@ jobs:
       - name: Lint
         run: cargo clippy --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release
+        shell: bash
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release
 
   shell:
     name: Shell scripts
@@ -54,7 +55,7 @@ jobs:
       - name: ShellCheck
         run: |
           shellcheck --version
-          shellcheck -x install.sh uninstall.sh dev.sh build.sh test.sh scripts/*.sh scripts/keenu-charge-limit \
+          scripts/ci/logged.sh shellcheck -x install.sh uninstall.sh dev.sh build.sh test.sh scripts/*.sh scripts/keenu-charge-limit \
             scripts/ci/*.sh scripts/install/install.sh scripts/windows/package.sh packaging/macos/build-app.sh packaging/aur/update.sh
 
   powershell:

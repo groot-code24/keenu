@@ -72,8 +72,8 @@ export default class KeenuPreferences extends ExtensionPreferences {
         // Whether a newer Keenu is out, as keenud last found, and the switch for asking.
         for (const row of updateRows(settings, window, this.metadata['version-name'] ?? '', this.path))
             about.add(row);
-        about.add(link('Website', 'Features, installing and updating', 'https://github.com/YOUR-GITHUB-OWNER/keenu'));
-        about.add(link('Report a problem', 'On GitHub; paste the report below in it', 'https://github.com/YOUR-GITHUB-OWNER/keenu/issues/new/choose'));
+        about.add(link('Website', 'Features, installing and updating', 'https://github.com/groot-code24/keenu'));
+        about.add(link('Report a problem', 'On GitHub; paste the report below in it', 'https://github.com/groot-code24/keenu/issues/new/choose'));
         const report = new Adw.ActionRow({title: 'Copy a bug report', subtitle: 'What’s installed, what works, and recent activity, ready to paste into a report',
             activatable: true});
         report.add_suffix(new Gtk.Image({icon_name: 'edit-copy-symbolic'}));
@@ -1239,17 +1239,14 @@ function confirm(window, {heading, body, action}, onYes) {
 }
 
 /** Where updating is explained, and the command that updates a one-line install. */
-const UPDATE_HELP = 'https://github.com/YOUR-GITHUB-OWNER/keenu/blob/main/docs/install.md#updating';
-// Filled in when a release is packaged (scripts/package.sh). Until then updating does nothing: this placeholder is a
-// name anyone could register on GitHub, so nothing may ever be fetched from it and run.
-const REPOSITORY = 'YOUR-GITHUB-OWNER/keenu';
-const INSTALL_COMMAND = `curl -fsSL https://github.com/${REPOSITORY}/releases/latest/download/install.sh | sh`;
-const RELEASES = 'https://github.com/YOUR-GITHUB-OWNER/keenu/releases/latest';
+const UPDATE_HELP = 'https://github.com/groot-code24/keenu/blob/main/docs/install.md#updating';
+const REPOSITORY = 'groot-code24/keenu';
+const INSTALL_COMMAND = `curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/main/scripts/install/install.sh | sh`;
+const RELEASES = 'https://github.com/groot-code24/keenu/releases';
 /** Installs version `$1` with that release's own install.sh (no sudo), appending to the log `$2`: first who runs
  * it ("isle-update-pid <pid> <boot id>"), last "isle-update-done <exit status>". */
 const UPDATE_SCRIPT = 'exec >>"$2" 2>&1 </dev/null; ' +
     'echo "isle-update-pid $$ $(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"; set -o pipefail; ' +
-    `case "${REPOSITORY}" in YOUR-*) echo "This build has no release address."; echo "isle-update-done 1"; exit 1;; esac; ` +
     `curl -fsSL --retry 2 "https://github.com/${REPOSITORY}/releases/download/v$1/install.sh" | KEENU_VERSION="$1" KEENU_YES=1 sh; ` +
     'echo "isle-update-done $?"';
 /** The update's log; its first line names the version ("isle-update 1.5.0"). */

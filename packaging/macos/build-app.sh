@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Makes Keenu.app and a DMG in dist/ from a release build, on a Mac. Signs and notarizes when told how:
 #
-#   KEENU_BUNDLE_ID          the bundle identifier; required for a real release
+#   KEENU_BUNDLE_ID          the bundle identifier, if not the usual one
 #   KEENU_SIGNING_IDENTITY   a "Developer ID Application: ..." certificate in the keychain
 #   KEENU_NOTARY_PROFILE     a profile saved with `xcrun notarytool store-credentials`
 #
@@ -16,10 +16,7 @@ case "$(uname -m)" in
     x86_64) ARCH=x64 ;;
     *) echo "No Keenu build for $(uname -m)." >&2; exit 1 ;;
 esac
-BUNDLE_ID="${KEENU_BUNDLE_ID:-invalid.keenu.placeholder}"
-if [ "$BUNDLE_ID" = invalid.keenu.placeholder ]; then
-    echo "Warning: KEENU_BUNDLE_ID is not set; using a placeholder. Do not publish this build." >&2
-fi
+BUNDLE_ID="${KEENU_BUNDLE_ID:-io.github.groot-code24.keenu}"
 OUT="dist"
 APP="$OUT/Keenu.app"
 BINARY="${CARGO_TARGET_DIR:-target}/release/keenu-macos"

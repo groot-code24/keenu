@@ -1,0 +1,6 @@
+# Scripts run on Linux and macOS, so every checkout keeps LF whatever the system's own default.
+* text=auto eol=lf
+*.png binary
+*.icns binary
+*.ico binary
+*.ttf binary

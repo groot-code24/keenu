@@ -1,24 +1,24 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Installs Keenu on Linux or macOS from an official release, with no development tools needed.
+# Installs and starts Keenu on Linux or macOS from an official release, with no development tools needed.
 #
-#   curl -fsSL https://YOUR-KEENU-DOMAIN/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh
 #
 # To read it first, which is a good idea with any script from the internet:
 #
-#   curl -fsSLO https://YOUR-KEENU-DOMAIN/install.sh
+#   curl -fsSLO https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh
 #   less install.sh
 #   sh install.sh
 #
-# Environment: KEENU_VERSION picks a version, KEENU_CHANNEL=prerelease allows test versions, KEENU_YES=1 asks
-# nothing, KEENU_MANIFEST_URL points at another manifest, KEENU_FORCE=1 installs on an untested GNOME Shell.
-# `sh install.sh --uninstall` takes Keenu off again; your data stays.
+# Environment: KEENU_VERSION picks a version, KEENU_CHANNEL=prerelease prefers test versions, KEENU_YES=1 asks
+# nothing, KEENU_NO_START=1 does not start it, KEENU_MANIFEST_URL points at another manifest, KEENU_FORCE=1 installs on
+# an untested GNOME Shell. `sh install.sh --uninstall`, or `curl ... | sh -s -- --uninstall`, takes Keenu off again; your
+# data stays.
 set -eu
 
-# Set by the release workflow when it publishes this script.
-DEFAULT_MANIFEST="https://YOUR-KEENU-DOMAIN/keenu-release.json"
-# The release signing key. Empty until a release sets it; the manifest's signature is then not checked.
-PUBLIC_KEY=""
+DEFAULT_MANIFEST="https://raw.githubusercontent.com/groot-code24/keenu/main/website/keenu-release.json"
+# Signs the official release list. Another list, from KEENU_MANIFEST_URL, is yours to trust.
+PUBLIC_KEY="lYDq7UwsRPdxHCtkc6IYT2cIbtZ+ik69NTsMF5+R8qk="
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 note() { printf '%s\n' "$*"; }
@@ -55,7 +55,7 @@ if [ "${1:-}" = "--uninstall" ]; then
             ;;
         Darwin)
             say "Removing Keenu (your data stays in ~/Library/Application Support/Keenu)"
-            pkill -x keenu-macos 2>/dev/null || true
+            pkill -x Keenu 2>/dev/null || true
             rm -rf "$HOME/Applications/Keenu.app"
             say "Keenu is removed."
             exit 0
@@ -71,9 +71,9 @@ elif have shasum; then
 else
     fail "please install sha256sum: without it the download cannot be checked."
 fi
-have python3 || fail "please install python3: the release list is JSON and this script reads it with Python."
 
 if [ "$OS" = Linux ]; then
+    have python3 || fail "please install python3: the release list is JSON and this script reads it with Python."
     have gnome-shell || fail "GNOME Shell was not found; on Linux, Keenu is a GNOME Shell extension. Other desktops are not supported yet."
     SHELL_VERSION="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -n1 || true)"
     if [ -z "$SHELL_VERSION" ] || [ "$SHELL_VERSION" -lt 46 ] || [ "$SHELL_VERSION" -gt 51 ]; then
@@ -82,18 +82,15 @@ if [ "$OS" = Linux ]; then
 fi
 
 MANIFEST="${KEENU_MANIFEST_URL:-$DEFAULT_MANIFEST}"
-case "$MANIFEST" in
-    *YOUR-KEENU-DOMAIN*) fail "this copy of the installer is not set up with a release address yet. Set KEENU_MANIFEST_URL, or install from a release page." ;;
-esac
 secure_url "$MANIFEST" || fail "$MANIFEST is not a secure address."
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 say "Looking up the release for $PLATFORM"
-curl -fsSL "$MANIFEST" -o "$WORK/manifest.json" || fail "could not fetch the release list from $MANIFEST."
+curl -fsSL "$MANIFEST" -o "$WORK/manifest.json" || fail "could not fetch the release list from $MANIFEST. If no release has been published yet, there is nothing to install."
 
-if [ -n "$PUBLIC_KEY" ]; then
+if [ "$MANIFEST" = "$DEFAULT_MANIFEST" ]; then
     curl -fsSL "$MANIFEST.sig" -o "$WORK/manifest.sig" || fail "the release list has no signature."
     if have openssl && openssl version 2>/dev/null | grep -qE '^OpenSSL 3'; then
         # A DER SubjectPublicKeyInfo: the fixed Ed25519 prefix, then the 32 bytes of the key.
@@ -108,35 +105,73 @@ if [ -n "$PUBLIC_KEY" ]; then
     fi
 fi
 
-# version, kind, file name, URL, SHA-256 and signed, one per line, for the best file of the newest release.
-PICK="$(KINDS="$KINDS" PLATFORM="$PLATFORM" WANTED="${KEENU_VERSION:-}" CHANNEL="${KEENU_CHANNEL:-stable}" python3 -I - "$WORK/manifest.json" <<'EOF'
+# version, kind, file name, URL, SHA-256, signed and channel, one per line, for the best file of the newest release:
+# the newest stable one, or the newest at all if none is stable yet.
+if [ "$OS" = Darwin ]; then
+    # Read with what every Mac has: its python3 is only a prompt to install the developer tools.
+    PICK="$(KINDS="$KINDS" PLATFORM="$PLATFORM" WANTED="${KEENU_VERSION:-}" CHANNEL="${KEENU_CHANNEL:-stable}" osascript -l JavaScript - "$WORK/manifest.json" <<'EOF'
+ObjC.import('Foundation');
+function run(argv) {
+    const environment = $.NSProcessInfo.processInfo.environment;
+    const env = name => ObjC.unwrap(environment.objectForKey(name)) || '';
+    const text = ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null));
+    const manifest = JSON.parse(text);
+    if (manifest.product !== 'Keenu')
+        throw new Error('that address does not hold a Keenu release list.');
+    const wanted = env('WANTED');
+    let releases = manifest.releases;
+    if (wanted)
+        releases = releases.filter(release => release.version === wanted);
+    else if (env('CHANNEL') !== 'prerelease') {
+        const stable = releases.filter(release => release.channel === 'stable');
+        if (stable.length > 0)
+            releases = stable;
+    }
+    for (const release of releases) {
+        for (const kind of env('KINDS').split(' ')) {
+            const artifact = release.artifacts.find(item => item.platform === env('PLATFORM') && item.kind === kind);
+            if (artifact)
+                return [release.version, artifact.kind, artifact.file_name, artifact.url, artifact.sha256,
+                    artifact.signature.signed ? 'signed' : 'unsigned', release.channel].join('\n');
+        }
+    }
+    throw new Error('no matching release has a file for this computer.');
+}
+EOF
+)" || fail "the release list has no file for this computer."
+else
+    PICK="$(KINDS="$KINDS" PLATFORM="$PLATFORM" WANTED="${KEENU_VERSION:-}" CHANNEL="${KEENU_CHANNEL:-stable}" python3 -I - "$WORK/manifest.json" <<'EOF'
 import json, os, sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 if manifest.get("product") != "Keenu":
     sys.exit("that address does not hold a Keenu release list.")
 wanted, channel = os.environ["WANTED"], os.environ["CHANNEL"]
-for release in manifest["releases"]:
-    if wanted and release["version"] != wanted:
-        continue
-    if not wanted and channel != "prerelease" and release["channel"] != "stable":
-        continue
+releases = manifest["releases"]
+if wanted:
+    releases = [release for release in releases if release["version"] == wanted]
+elif channel != "prerelease":
+    releases = [release for release in releases if release["channel"] == "stable"] or releases
+for release in releases:
     for kind in os.environ["KINDS"].split():
         for artifact in release["artifacts"]:
             if artifact["platform"] == os.environ["PLATFORM"] and artifact["kind"] == kind:
                 print(release["version"], artifact["kind"], artifact["file_name"], artifact["url"], artifact["sha256"],
-                      "signed" if artifact["signature"]["signed"] else "unsigned", sep="\n")
+                      "signed" if artifact["signature"]["signed"] else "unsigned", release["channel"], sep="\n")
                 sys.exit(0)
 sys.exit("no matching release has a file for this computer.")
 EOF
-)" || fail "$PICK"
+)" || fail "the release list has no file for this computer."
+fi
 VERSION="$(printf '%s\n' "$PICK" | sed -n 1p)"
 KIND="$(printf '%s\n' "$PICK" | sed -n 2p)"
 NAME="$(printf '%s\n' "$PICK" | sed -n 3p)"
 URL="$(printf '%s\n' "$PICK" | sed -n 4p)"
 SUM="$(printf '%s\n' "$PICK" | sed -n 5p)"
 SIGNED="$(printf '%s\n' "$PICK" | sed -n 6p)"
+RELEASE_CHANNEL="$(printf '%s\n' "$PICK" | sed -n 7p)"
 case "$NAME" in */*|*..*) fail "the release list names a file oddly: $NAME" ;; esac
 secure_url "$URL" || fail "$URL is not a secure address."
+[ "$RELEASE_CHANNEL" = stable ] || note "Note: Keenu $VERSION is a test version; no stable version has been released yet."
 
 if [ "${KEENU_YES:-}" != 1 ] && [ -t 0 ]; then
     printf 'Install Keenu %s (%s)? [Y/n] ' "$VERSION" "$KIND"
@@ -161,11 +196,10 @@ case "$OS" in
         install -Dm755 "$(dirname "$INSTALLER")/uninstall.sh" "$HOME/.local/bin/keenu-uninstall"
         ;;
     Darwin)
-        [ "$SIGNED" = signed ] || note "Note: this build is not notarized, so macOS will refuse to open it until you allow it in System Settings > Privacy & Security."
         MOUNT="$WORK/mount"
         mkdir "$MOUNT"
         hdiutil attach -quiet -nobrowse -mountpoint "$MOUNT" "$WORK/$NAME" || fail "could not open the disk image."
-        pkill -x keenu-macos 2>/dev/null || true
+        pkill -x Keenu 2>/dev/null || true
         mkdir -p "$HOME/Applications"
         rm -rf "$HOME/Applications/Keenu.app"
         cp -R "$MOUNT/Keenu.app" "$HOME/Applications/"
@@ -174,4 +208,8 @@ case "$OS" in
 esac
 
 say "Keenu $VERSION is installed"
-note "To remove it later: sh install.sh --uninstall"
+if [ "$OS" = Darwin ] && [ "${KEENU_NO_START:-}" != 1 ]; then
+    [ "$SIGNED" = signed ] || note "This build is not notarized by Apple: if macOS refuses to open it, allow it in System Settings > Privacy & Security."
+    open "$HOME/Applications/Keenu.app" && say "Keenu is running: look for it at the top of your screen and in the menu bar."
+fi
+note "To remove it later: curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh -s -- --uninstall"

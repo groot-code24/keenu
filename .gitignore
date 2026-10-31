@@ -1,5 +1,6 @@
 /target
 gnome-extension/schemas/gschemas.compiled
 /dist
+/site-dist
 /node_modules
 /.dev-data

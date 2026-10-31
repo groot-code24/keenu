@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security problem
-    url: https://github.com/YOUR-GITHUB-OWNER/keenu/security/advisories/new
+    url: https://github.com/groot-code24/keenu/security/advisories/new
     about: Please report security problems privately here, not in a public issue.
   - name: Installation guide
-    url: https://github.com/YOUR-GITHUB-OWNER/keenu/blob/main/docs/install.md
+    url: https://github.com/groot-code24/keenu/blob/main/docs/install.md
     about: Step-by-step install, updating, and what to do if the island does not appear.

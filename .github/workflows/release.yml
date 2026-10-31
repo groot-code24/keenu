@@ -4,8 +4,8 @@ name: Release
 # manifest, and only then publishes. If anything fails, nothing is published.
 #
 # Repository settings it reads; see docs/release-engineering.md:
-#   vars.KEENU_RELEASE_BASE_URL, KEENU_UPDATE_MANIFEST_URL, KEENU_UPDATE_PUBLIC_KEY, KEENU_PUBLISHER
-#   secrets.KEENU_UPDATE_SECRET_KEY         signs the manifest
+#   secrets.KEENU_UPDATE_SECRET_KEY         signs the manifest; required
+#   vars.KEENU_PUBLISHER                    the signer's name, once there is a certificate
 #   secrets.KEENU_SIGNING_CERT_BASE64 and KEENU_SIGNING_CERT_PASSWORD, vars.KEENU_SIGNING_THUMBPRINT    Windows
 #   vars.KEENU_REQUIRE_SIGNING              when "true", a stable release without Windows signing fails
 
@@ -37,17 +37,11 @@ jobs:
             *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
-      - name: The release settings are in place
+      - name: The signing key is in place
         env:
-          REPOSITORY: ${{ vars.KEENU_RELEASE_REPOSITORY }}
-          BASE: ${{ vars.KEENU_RELEASE_BASE_URL }}
-          MANIFEST: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
-          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          KEENU_UPDATE_SECRET_KEY: ${{ secrets.KEENU_UPDATE_SECRET_KEY }}
         run: |
-          [ -n "$REPOSITORY" ] || { echo "Set the repository variable KEENU_RELEASE_REPOSITORY"; exit 1; }
-          [ -n "$BASE" ] || { echo "Set the repository variable KEENU_RELEASE_BASE_URL"; exit 1; }
-          [ -n "$MANIFEST" ] || { echo "Set the repository variable KEENU_UPDATE_MANIFEST_URL"; exit 1; }
-          [ -n "$PUBLIC_KEY" ] || { echo "Set the repository variable KEENU_UPDATE_PUBLIC_KEY"; exit 1; }
+          [ -n "$KEENU_UPDATE_SECRET_KEY" ] || { echo "::error::Set the repository secret KEENU_UPDATE_SECRET_KEY"; exit 1; }
 
   windows:
     needs: validate
@@ -161,10 +155,10 @@ jobs:
       - name: Make and sign the manifest
         env:
           KEENU_UPDATE_SECRET_KEY: ${{ secrets.KEENU_UPDATE_SECRET_KEY }}
-          BASE: ${{ vars.KEENU_RELEASE_BASE_URL }}
+          BASE: ${{ vars.KEENU_RELEASE_BASE_URL || format('https://github.com/{0}/releases/download', github.repository) }}
           SIGNED: ${{ needs.sign-windows.outputs.signed }}
           PUBLISHER: ${{ vars.KEENU_PUBLISHER }}
-          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY || 'lYDq7UwsRPdxHCtkc6IYT2cIbtZ+ik69NTsMF5+R8qk=' }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           signed=()
@@ -172,11 +166,14 @@ jobs:
             signed=(--signed "msi=authenticode:$PUBLISHER" --signed "exe=authenticode:$PUBLISHER")
           fi
           repository="https://github.com/$GITHUB_REPOSITORY"
+          earlier=()
+          # Keeps the older releases: a tag is usually made on the newest main.
+          git fetch --quiet origin main:refs/remotes/origin/main
+          if git show origin/main:website/keenu-release.json > earlier.json 2>/dev/null; then earlier=(--merge earlier.json); fi
           cargo run --quiet --locked -p keenu-release -- manifest release --version "$VERSION" \
             --base-url "$BASE/v$VERSION" --out release/keenu-release.json \
-            --notes-url "$repository/releases/tag/v$VERSION" --github-url "$repository/releases/tag/v$VERSION" "${signed[@]}"
+            --notes-url "$repository/releases/tag/v$VERSION" --github-url "$repository/releases/tag/v$VERSION" "${signed[@]}" "${earlier[@]}"
           cargo run --quiet --locked -p keenu-release -- checksums release
-          [ -n "$KEENU_UPDATE_SECRET_KEY" ] || { echo "Set the secret KEENU_UPDATE_SECRET_KEY"; exit 1; }
           cargo run --quiet --locked -p keenu-release -- sign release/keenu-release.json --key-env KEENU_UPDATE_SECRET_KEY
           cargo run --quiet --locked -p keenu-release -- verify release/keenu-release.json --public-key "$PUBLIC_KEY"
       - name: No placeholder in anything published
@@ -184,15 +181,10 @@ jobs:
           # GitHub user names are free to register, so a placeholder left in a package could be claimed by anyone.
           mkdir -p check
           tar -xzf release/keenu-*-linux-x64.tar.gz -C check
-          if grep -rl 'YOUR-GITHUB-OWNER' check; then echo "A placeholder is left in the Linux package."; exit 1; fi
-      - name: Point the install scripts at this release
-        env:
-          MANIFEST: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
-          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
-        run: |
-          sed -e "s|https://YOUR-KEENU-DOMAIN/keenu-release.json|$MANIFEST|" -e "s|^PUBLIC_KEY=\"\"|PUBLIC_KEY=\"$PUBLIC_KEY\"|" \
-            scripts/install/install.sh > release/install.sh
-          sed -e "s|https://YOUR-KEENU-DOMAIN/keenu-release.json|$MANIFEST|" scripts/install/install.ps1 > release/install.ps1
+          if grep -rlE 'YOUR-(GITHUB-OWNER|KEENU-DOMAIN|NAME|EMAIL)' check scripts/install; then echo "A placeholder is left in what is published."; exit 1; fi
+          rm -rf check
+      - name: The install scripts
+        run: cp scripts/install/install.sh scripts/install/install.ps1 release/
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -213,3 +205,20 @@ jobs:
           flags=()
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
           gh release create "$tag" release/* --title "Keenu ${tag#v}" --notes-file notes.md "${flags[@]}"
+      - name: Put the release list where the website and the install scripts read it
+        run: |
+          # After the release: a list never names a file that is not there yet.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --force-create publish-list origin/main
+          cp release/keenu-release.json release/keenu-release.json.sig website/
+          git add website/keenu-release.json website/keenu-release.json.sig
+          git commit -m "Release list for $GITHUB_REF_NAME"
+          git push origin HEAD:main || { git pull --rebase origin main && git push origin HEAD:main; }
+
+  verify:
+    name: What was published works
+    needs: [validate, publish]
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}

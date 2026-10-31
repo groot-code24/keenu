@@ -2,7 +2,7 @@ pkgbase = keenu-bin
 	pkgdesc = A notch-style island for the GNOME Shell top bar: music with synced lyrics, calls, a focus timer, a calendar, a file shelf, app usage and a voice assistant
 	pkgver = 1.5.0
 	pkgrel = 1
-	url = https://github.com/YOUR-GITHUB-OWNER/keenu
+	url = https://github.com/groot-code24/keenu
 	install = keenu-bin.install
 	arch = x86_64
 	license = GPL-3.0-or-later
@@ -21,7 +21,7 @@ pkgbase = keenu-bin
 	conflicts = keenu
 	options = !strip
 	options = !debug
-	source_x86_64 = https://github.com/YOUR-GITHUB-OWNER/keenu/releases/download/v1.5.0/keenu-1.5.0-x86_64-linux.tar.gz
+	source_x86_64 = https://github.com/groot-code24/keenu/releases/download/v1.5.0/keenu-1.5.0-x86_64-linux.tar.gz
 	sha256sums_x86_64 = 7a6f727e6bb6de15cffdeeae4cd06aa7cbb7b64bbe83f730cdf601e92da0d667
 
 pkgname = keenu-bin

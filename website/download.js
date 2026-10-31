@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The download page: everything on it comes from the release manifest, so it can only offer what exists.
 
-import { chooseDownloads, detectPlatform, formatSize, latestRelease, safeUrl } from './choose.js';
+import { chooseDownloads, detectPlatform, downloadsBySystem, formatSize, installCommands, latestRelease, safeUrl } from './choose.js';
 
 const MANIFEST = './keenu-release.json';
 
@@ -37,7 +37,17 @@ function row(artifact) {
     return item;
 }
 
+/** The commands read from this site once it has an address of its own; without one, they stay GitHub's. */
+function showInstallCommands() {
+    const commands = installCommands(location);
+    if (!commands)
+        return;
+    element('install-unix').textContent = commands.unix;
+    element('install-windows').textContent = commands.windows;
+}
+
 async function main() {
+    showInstallCommands();
     let manifest;
     try {
         const answer = await fetch(MANIFEST, { cache: 'no-cache' });
@@ -78,6 +88,13 @@ async function main() {
             ? `This release has no download for ${platform} yet.`
             : 'Choose your system from the list below.';
     }
+
+    const systems = element('systems');
+    for (const { name, artifact } of downloadsBySystem(release)) {
+        if (safeUrl(artifact.url))
+            systems.append(make('a', `${name} (.${artifact.kind})`, { href: artifact.url, class: 'system' }));
+    }
+    element('systems-section').hidden = false;
 
     const table = element('others');
     for (const artifact of recommended ? [recommended, ...others] : others)

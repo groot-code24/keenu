@@ -164,11 +164,7 @@ def test_one_command(args, work):
                     "--base-url", f"http://127.0.0.1:{port}", "--out", str(folder / "keenu-release.json")])
         check("the release tool lists what is there", made.returncode == 0, made.stderr)
 
-        env = dict(os.environ, KEENU_YES="1", KEENU_CHANNEL="prerelease")
-        code, out = installer(env)
-        check("with no release address it says so and changes nothing", code != 0 and "not set up" in out and not EXE.exists(), out)
-
-        env["KEENU_MANIFEST_URL"] = f"http://127.0.0.1:{port}/keenu-release.json"
+        env = dict(os.environ, KEENU_YES="1", KEENU_NO_START="1", KEENU_MANIFEST_URL=f"http://127.0.0.1:{port}/keenu-release.json")
         code, out = installer(env)
         check("the one-command installer installs the release", code == 0 and EXE.exists(), out)
         check("it verified the checksum", "Checksum verified" in out, out)
@@ -195,6 +191,9 @@ def test_one_command(args, work):
         env["KEENU_MANIFEST_URL"] = f"http://127.0.0.1:{port}/nothing-here.json"
         code, out = installer(env)
         check("a release list that is not there is a clear error", code != 0 and "could not fetch" in out, out)
+        script = HERE.parent / "install" / "install.ps1"
+        done = run([str(POWERSHELL), "-NoProfile", "-Command", f"Get-Content -Raw '{script}' | Invoke-Expression; Write-Host window-still-open"], env=env)
+        check("a failure through iex leaves the window open, with the reason", "could not fetch" in done.stdout and "window-still-open" in done.stdout, done.stdout + done.stderr)
     finally:
         server.shutdown()
 

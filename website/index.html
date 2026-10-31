@@ -16,6 +16,9 @@
   a { color: var(--text); }
   #recommended { display: inline-block; margin: 16px 0 8px; padding: 12px 24px; border-radius: 24px; background: var(--accent); color: #000; font-weight: 600; text-decoration: none; }
   #recommended[hidden] { display: none; }
+  #systems { display: flex; flex-wrap: wrap; gap: 8px; }
+  .system { padding: 8px 16px; border: 1px solid var(--line); border-radius: 20px; text-decoration: none; }
+  .system:hover { border-color: var(--muted); }
   pre { background: #1c1c1e; border-radius: 10px; padding: 12px 16px; overflow-x: auto; font-size: 14px; }
   .scroll { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; font-size: 14px; }
@@ -35,23 +38,30 @@
   <p id="signature"></p>
   <p id="checksum"></p>
 
+  <section id="systems-section" hidden>
+    <h2>Download for your system</h2>
+    <div id="systems"></div>
+  </section>
+
+  <h2>Or install and start it with one command</h2>
+  <p>Linux and macOS, in a terminal:</p>
+  <pre id="install-unix">curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh</pre>
+  <p>Windows, in PowerShell:</p>
+  <pre id="install-windows">irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1 | iex</pre>
+  <p>Each checks its download against the published SHA-256 before installing, installs for your user only, and needs no development tools.</p>
+
+  <h2>Before you install</h2>
+  <p><strong>This is an alpha.</strong> <a href="https://github.com/groot-code24/keenu/blob/main/docs/platform-support.md">What works where</a> says what has and has not been tested on each system.</p>
+  <p><strong>Windows:</strong> the installers are not code signed yet, so if you download one, SmartScreen may say it is from an unknown publisher.</p>
+  <p><strong>macOS:</strong> the app is not notarized by Apple yet. If macOS refuses to open a download, allow it in System Settings &gt; Privacy &amp; Security.</p>
+  <p><strong>Linux:</strong> Keenu is a GNOME Shell extension and needs GNOME Shell 46 to 51. Log out and back in once after installing, so GNOME Shell loads it.</p>
+
   <section id="others-section" hidden>
     <h2>All downloads</h2>
     <div class="scroll"><table><thead><tr><th>File</th><th>For</th><th>Size</th><th>Signature</th><th>SHA-256</th></tr></thead><tbody id="others"></tbody></table></div>
   </section>
   <p id="links"></p>
-
-  <h2>Install from a terminal</h2>
-  <p>Linux and macOS:</p>
-  <pre>curl -fsSL https://YOUR-KEENU-DOMAIN/install.sh | sh</pre>
-  <p>Windows PowerShell:</p>
-  <pre>irm https://YOUR-KEENU-DOMAIN/install.ps1 | iex</pre>
-  <p>To read a script before running it, which is a good idea with any script from the internet:</p>
-  <pre>curl -fsSLO https://YOUR-KEENU-DOMAIN/install.sh
-less install.sh
-sh install.sh</pre>
-  <p>Each checks its download against the published SHA-256 before installing, and needs no development tools.</p>
-  <p>On Linux, Keenu is a GNOME Shell extension and needs GNOME Shell 46 to 51. See the <a href="https://github.com/YOUR-GITHUB-OWNER/keenu">source code</a> for what works on each system.</p>
+  <p><a href="https://github.com/groot-code24/keenu">Source code</a></p>
 </main>
 <script type="module" src="./download.js"></script>
 </body>

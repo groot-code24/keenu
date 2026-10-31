@@ -38,15 +38,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Lint
         if: ${{ !matrix.build_only }}
-        run: cargo clippy --locked -p keenu-windows --all-targets -- -D warnings
+        shell: bash
+        run: scripts/ci/logged.sh cargo clippy --locked -p keenu-windows --all-targets -- -D warnings
       - name: Test against real Windows APIs
         if: ${{ !matrix.build_only }}
-        run: cargo test --locked -p keenu-windows -p keenu-app -p keenu-security
+        shell: bash
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-windows -p keenu-app -p keenu-security
       - name: Build
         env:
           KEENU_SIGNING_THUMBPRINT: ${{ vars.KEENU_SIGNING_THUMBPRINT }}
-          KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
-          KEENU_UPDATE_PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL || format('https://raw.githubusercontent.com/{0}/main/website/keenu-release.json', github.repository) }}
+          KEENU_UPDATE_PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY || 'lYDq7UwsRPdxHCtkc6IYT2cIbtZ+ik69NTsMF5+R8qk=' }}
           KEENU_GOOGLE_CLIENT_ID: ${{ vars.KEENU_GOOGLE_CLIENT_ID }}
           KEENU_GOOGLE_CLIENT_SECRET: ${{ vars.KEENU_GOOGLE_CLIENT_SECRET }}
           KEENU_MICROSOFT_CLIENT_ID: ${{ vars.KEENU_MICROSOFT_CLIENT_ID }}
@@ -58,8 +60,8 @@ jobs:
           if ($info.ProductName -ne 'Keenu') { throw "ProductName is '$($info.ProductName)'" }
       - name: Drive the real program on the runner's desktop
         if: ${{ !matrix.build_only }}
-        shell: powershell
-        run: .\scripts\windows\smoke-test.ps1 -Exe target\${{ matrix.target }}\release\keenu.exe
+        shell: bash
+        run: scripts/ci/logged.sh powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/smoke-test.ps1 -Exe 'target\${{ matrix.target }}\release\keenu.exe'
       - uses: actions/upload-artifact@v4
         with:
           name: keenu-windows-${{ matrix.arch }}-exe
@@ -85,9 +87,9 @@ jobs:
           KEENU_PUBLISHER: ${{ vars.KEENU_PUBLISHER }}
         run: |
           version="${{ inputs.version }}"
-          scripts/windows/package.sh built/keenu.exe "${version:-}" x64
+          scripts/ci/logged.sh scripts/windows/package.sh built/keenu.exe "${version:-}" x64
           # The older version the upgrade test starts from.
-          scripts/windows/package.sh built/keenu.exe 0.0.2 x64
+          scripts/ci/logged.sh scripts/windows/package.sh built/keenu.exe 0.0.2 x64
       - uses: actions/upload-artifact@v4
         with:
           name: keenu-windows-x64-packages
@@ -109,10 +111,10 @@ jobs:
         with:
           name: keenu-windows-x64-packages
           path: dist
-      - shell: pwsh
+      - shell: bash
         run: |
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          python scripts/windows/installer_test.py `
-            --msi "dist/Keenu-$version-windows-x64.msi" --old-msi dist/Keenu-0.0.2-windows-x64.msi `
-            --setup "dist/Keenu-$version-windows-x64-setup.exe" --zip "dist/Keenu-$version-windows-x64-portable.zip" `
-            --release-tool built/keenu-release.exe --version $version
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          scripts/ci/logged.sh python scripts/windows/installer_test.py \
+            --msi "dist/Keenu-$version-windows-x64.msi" --old-msi dist/Keenu-0.0.2-windows-x64.msi \
+            --setup "dist/Keenu-$version-windows-x64-setup.exe" --zip "dist/Keenu-$version-windows-x64-portable.zip" \
+            --release-tool built/keenu-release.exe --version "$version"

@@ -32,7 +32,7 @@ edition = "2024"
 # keenu-core and keenud use let chains (1.88); keenu-shelf sets its own, for gtk-rs.
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/YOUR-GITHUB-OWNER/keenu"
+repository = "https://github.com/groot-code24/keenu"
 # Released as programs, not on crates.io.
 publish = false
 

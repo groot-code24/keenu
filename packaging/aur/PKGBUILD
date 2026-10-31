@@ -1,4 +1,4 @@
-# Maintainer: YOUR-NAME <YOUR-EMAIL>
+# Maintainer: groot-code24 <groot-code24@users.noreply.github.com>
 # Keenu from its release tarball, with the programs GitHub Actions built. After a release,
 # `./update.sh <version>` sets the version and checksum here and in .SRCINFO.
 
@@ -7,7 +7,7 @@ pkgver=2.0.0
 pkgrel=1
 pkgdesc='A notch-style island for the GNOME Shell top bar: music with synced lyrics, calls, a focus timer, a calendar, a file shelf, app usage and a voice assistant'
 arch=('x86_64')
-url='https://github.com/YOUR-GITHUB-OWNER/keenu'
+url='https://github.com/groot-code24/keenu'
 license=('GPL-3.0-or-later' 'OFL-1.1')
 depends=('gnome-shell>=1:46' 'dconf' 'gtk4' 'glib2' 'pango' 'gdk-pixbuf2' 'gcc-libs' 'glibc' 'bash')
 optdepends=('vulkan-icd-loader: speech recognition on the graphics card, else on the processor')
@@ -15,7 +15,7 @@ provides=('keenu')
 conflicts=('keenu')
 options=('!strip' '!debug')
 install=keenu-bin.install
-source_x86_64=("https://github.com/YOUR-GITHUB-OWNER/keenu/releases/download/v$pkgver/keenu-$pkgver-$CARCH-linux.tar.gz")
+source_x86_64=("https://github.com/groot-code24/keenu/releases/download/v$pkgver/keenu-$pkgver-$CARCH-linux.tar.gz")
 sha256sums_x86_64=('SKIP-UNTIL-A-RELEASE-EXISTS: run update.sh')
 
 package() {

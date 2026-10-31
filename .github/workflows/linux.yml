@@ -39,16 +39,17 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Lint
-        run: cargo clippy --locked -p keenu-daemon -p keenu-shelf -p keenu-whisper --all-targets -- -D warnings
+        run: scripts/ci/logged.sh cargo clippy --locked -p keenu-daemon -p keenu-shelf -p keenu-whisper --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked -p keenu-daemon -p keenu-shelf -p keenu-whisper -p keenu-core -p keenu-integrations
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-daemon -p keenu-shelf -p keenu-whisper -p keenu-core -p keenu-integrations
       - name: Package
         env:
           KEENU_MAINTAINER: ${{ vars.KEENU_MAINTAINER }}
-          KEENU_RELEASE_REPOSITORY: ${{ vars.KEENU_RELEASE_REPOSITORY }}
+          KEENU_RELEASE_REPOSITORY: ${{ vars.KEENU_RELEASE_REPOSITORY || github.repository }}
         run: |
-          tarball="$(scripts/package.sh | tail -n1)"
-          scripts/package-system.sh "$tarball"
+          scripts/ci/logged.sh scripts/package.sh
+          tarball="$(ls dist/keenu-*-linux.tar.gz)"
+          scripts/ci/logged.sh scripts/package-system.sh "$tarball"
           ls -l dist
       - uses: actions/upload-artifact@v4
         with:
@@ -69,6 +70,7 @@ jobs:
           - { image: 'ubuntu:24.04', package: deb }
           - { image: 'debian:13', package: deb }
           - { image: 'fedora:43', package: rpm }
+          - { image: 'debian:13', package: one-command }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -80,9 +82,16 @@ jobs:
           IMAGE: ${{ matrix.image }}
           KIND: ${{ matrix.package }}
         run: |
+          manifest=()
           case "$KIND" in
+            one-command)
+              # The installer against this build, served as if it were a release.
+              mkdir served && cp dist/keenu-*-linux.tar.gz served/
+              python3 scripts/ci/serve-release.py served 8123 linux-x64 tar.gz &
+              package=scripts/install/install.sh
+              manifest=(--network host -e KEENU_MANIFEST_URL=http://127.0.0.1:8123/keenu-release.json) ;;
             tarball) package="$(ls dist/keenu-*-linux.tar.gz)" ;;
             deb) package="$(ls dist/keenu_*.deb)" ;;
             rpm) package="$(ls dist/keenu-*.rpm)" ;;
           esac
-          docker run --rm -v "$PWD:/src:ro" "$IMAGE" /src/scripts/ci/smoke-test.sh "/src/$package"
+          scripts/ci/logged.sh docker run --rm "${manifest[@]}" -v "$PWD:/src:ro" "$IMAGE" /src/scripts/ci/smoke-test.sh "/src/$package"

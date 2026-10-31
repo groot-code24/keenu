@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - { arch: arm64, os: macos-14 }
-          - { arch: x64, os: macos-13 }
+          - { arch: x64, os: macos-15-intel }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -30,21 +30,21 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Lint
-        run: cargo clippy --locked -p keenu-macos --all-targets -- -D warnings
+        run: scripts/ci/logged.sh cargo clippy --locked -p keenu-macos --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-app -p keenu-ui
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-app -p keenu-ui
       - name: Build
         env:
-          KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
-          KEENU_UPDATE_PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL || format('https://raw.githubusercontent.com/{0}/main/website/keenu-release.json', github.repository) }}
+          KEENU_UPDATE_PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY || 'lYDq7UwsRPdxHCtkc6IYT2cIbtZ+ik69NTsMF5+R8qk=' }}
           KEENU_GOOGLE_CLIENT_ID: ${{ vars.KEENU_GOOGLE_CLIENT_ID }}
           KEENU_GOOGLE_CLIENT_SECRET: ${{ vars.KEENU_GOOGLE_CLIENT_SECRET }}
           KEENU_MICROSOFT_CLIENT_ID: ${{ vars.KEENU_MICROSOFT_CLIENT_ID }}
-        run: cargo build --release --locked -p keenu-macos
+        run: scripts/ci/logged.sh cargo build --release --locked -p keenu-macos
       - name: Make the app and disk image
         env:
           KEENU_BUNDLE_ID: ${{ vars.KEENU_BUNDLE_ID }}
-        run: packaging/macos/build-app.sh
+        run: scripts/ci/logged.sh packaging/macos/build-app.sh
       - name: The app bundle is well formed and starts
         run: |
           test -x dist/Keenu.app/Contents/MacOS/Keenu
@@ -52,6 +52,22 @@ jobs:
           codesign --verify --verbose=2 dist/Keenu.app
           dist/Keenu.app/Contents/MacOS/Keenu --version
           dist/Keenu.app/Contents/MacOS/Keenu --capabilities
+      - name: The one-command installer installs, starts and removes this build
+        env:
+          PLATFORM: macos-${{ matrix.arch }}
+        run: |
+          mkdir served && cp dist/*.dmg served/
+          python3 scripts/ci/serve-release.py served 8123 "$PLATFORM" dmg &
+          server=$!
+          sleep 2
+          KEENU_YES=1 KEENU_MANIFEST_URL=http://127.0.0.1:8123/keenu-release.json scripts/ci/logged.sh sh scripts/install/install.sh
+          test -x "$HOME/Applications/Keenu.app/Contents/MacOS/Keenu"
+          sleep 10
+          pgrep -x Keenu || { echo '::error::Keenu did not stay running after the installer started it.'; exit 1; }
+          scripts/ci/logged.sh sh scripts/install/install.sh --uninstall
+          test ! -e "$HOME/Applications/Keenu.app"
+          if pgrep -x Keenu; then echo '::error::Keenu is still running after removal.'; exit 1; fi
+          kill "$server"
       - uses: actions/upload-artifact@v4
         with:
           name: keenu-macos-${{ matrix.arch }}

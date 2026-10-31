@@ -8,8 +8,9 @@ export function detectPlatform({ userAgent = '', platform = '', architecture = '
     if (text.includes('win'))
         return arm ? 'windows-arm64' : 'windows-x64';
     if (text.includes('mac'))
-        // A browser on an Intel Mac and on Apple Silicon says the same; the caller offers both.
-        return arm ? 'macos-arm64' : 'macos-x64';
+        // Every Mac's browser says "Intel" and only some say more, so unless told it is Intel, this is the likelier one.
+        // The page offers both.
+        return architecture === 'x86' ? 'macos-x64' : 'macos-arm64';
     if (text.includes('linux') || text.includes('x11'))
         return arm ? 'linux-arm64' : 'linux-x64';
     return null;
@@ -22,26 +23,56 @@ const PREFERRED = {
     linux: ['tar.gz', 'deb', 'rpm', 'appimage'],
 };
 
+/** Each platform as people call it, in the order the page lists them. */
+const PLATFORM_NAMES = [
+    ['windows-x64', 'Windows'],
+    ['windows-arm64', 'Windows on Arm'],
+    ['macos-arm64', 'macOS, Apple silicon'],
+    ['macos-x64', 'macOS, Intel'],
+    ['linux-x64', 'Linux x64'],
+    ['linux-arm64', 'Linux Arm64'],
+];
+
 /** The release to show: the newest stable one, or the newest at all if none is stable yet. */
 export function latestRelease(manifest) {
     const releases = manifest?.releases ?? [];
     return releases.find(release => release.channel === 'stable') ?? releases[0] ?? null;
 }
 
-/** What to offer from `release`: the recommended file for `platform`, and the rest as alternatives. */
-export function chooseDownloads(release, platform) {
-    const artifacts = release?.artifacts ?? [];
-    const here = artifacts.filter(artifact => artifact.platform === platform);
-    const family = (platform ?? '').split('-')[0];
-    const order = PREFERRED[family] ?? [];
+/** The best file of `artifacts` for `platform`, or `null`. */
+function bestFor(artifacts, platform) {
+    const order = PREFERRED[(platform ?? '').split('-')[0]] ?? [];
     const rank = artifact => {
         const at = order.indexOf(artifact.kind);
         return at < 0 ? order.length : at;
     };
-    const sorted = [...here].sort((a, b) => rank(a) - rank(b));
-    const recommended = sorted[0] ?? null;
+    return artifacts.filter(artifact => artifact.platform === platform).sort((a, b) => rank(a) - rank(b))[0] ?? null;
+}
+
+/** What to offer from `release`: the recommended file for `platform`, and the rest as alternatives. */
+export function chooseDownloads(release, platform) {
+    const artifacts = release?.artifacts ?? [];
+    const recommended = bestFor(artifacts, platform);
     const others = artifacts.filter(artifact => artifact !== recommended);
     return { recommended, others };
+}
+
+/** One button per system this release has a file for: the best file for each. */
+export function downloadsBySystem(release) {
+    const artifacts = release?.artifacts ?? [];
+    return PLATFORM_NAMES
+        .map(([platform, name]) => ({ name, artifact: bestFor(artifacts, platform) }))
+        .filter(({ artifact }) => artifact);
+}
+
+/** The commands to install from this site, or `null` where its address could not work for other people. */
+export function installCommands({ protocol, host } = {}) {
+    if (protocol !== 'https:' || !host)
+        return null;
+    return {
+        unix: `curl -fsSL https://${host}/install.sh | sh`,
+        windows: `irm https://${host}/install.ps1 | iex`,
+    };
 }
 
 /** Only addresses that can be real: nothing else may become a link on the page. */

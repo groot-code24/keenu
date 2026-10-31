@@ -14,7 +14,7 @@ FORMATS=("$@")
 cd "$(dirname "$0")/.."
 umask 022
 UUID="isle@zickrian.github.io"
-MAINTAINER="${KEENU_MAINTAINER:-YOUR-NAME <YOUR-EMAIL>}"
+MAINTAINER="${KEENU_MAINTAINER:-groot-code24 <groot-code24@users.noreply.github.com>}"
 SUMMARY="A notch-style island for the GNOME Shell top bar"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -72,7 +72,7 @@ build_deb() {
     cat > "$root/usr/share/doc/keenu/copyright" <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Keenu
-Source: https://github.com/YOUR-GITHUB-OWNER/keenu
+Source: https://github.com/groot-code24/keenu
 
 Files: *
 Copyright: Keenu contributors
@@ -101,7 +101,7 @@ Depends: $depends, gnome-shell (>= 46), dbus-user-session | default-dbus-session
 Recommends: libvulkan1
 Section: gnome
 Priority: optional
-Homepage: https://github.com/YOUR-GITHUB-OWNER/keenu
+Homepage: https://github.com/groot-code24/keenu
 Description: $SUMMARY
  Keenu turns the middle of the GNOME Shell top bar into a notch-style island: music
  with synced lyrics, calls, a focus timer, reminders, a calendar, a file shelf,
@@ -125,7 +125,7 @@ Version: ${VERSION//-/\~}
 Release: 1
 Summary: $SUMMARY
 License: GPL-3.0-or-later AND OFL-1.1
-URL: https://github.com/YOUR-GITHUB-OWNER/keenu
+URL: https://github.com/groot-code24/keenu
 Packager: $MAINTAINER
 Requires: gnome-shell >= 46
 # Speech recognition on the graphics card; without it, on the processor.

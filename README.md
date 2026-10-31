@@ -44,21 +44,22 @@ focus timer, tasks, reminders, calls and an AI assistant that are not on the oth
 
 ## Install
 
-There is no published release yet, so these work once one exists and the addresses below have been set:
+Download a package for your system from the [releases page](https://github.com/groot-code24/keenu/releases), or
+install and start it with one command:
 
 ```sh
 # Linux and macOS
-curl -fsSL https://YOUR-KEENU-DOMAIN/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh
 ```
 ```powershell
 # Windows
-irm https://YOUR-KEENU-DOMAIN/install.ps1 | iex
+irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1 | iex
 ```
 
 To read a script before running it, which is a good idea with any script from the internet:
 
 ```sh
-curl -fsSLO https://YOUR-KEENU-DOMAIN/install.sh
+curl -fsSLO https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh
 less install.sh
 sh install.sh
 ```

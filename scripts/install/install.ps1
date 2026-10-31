@@ -1,25 +1,33 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Installs Keenu on Windows from an official release, with no development tools needed.
+# Installs and starts Keenu on Windows from an official release, with no development tools needed.
 #
-#   irm https://YOUR-KEENU-DOMAIN/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1 | iex
 #
 # To read it first, which is a good idea with any script from the internet:
 #
-#   irm https://YOUR-KEENU-DOMAIN/install.ps1 -OutFile install.ps1
+#   irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1 -OutFile install.ps1
 #   notepad install.ps1
 #   powershell -ExecutionPolicy Bypass -File install.ps1
 #
-# Environment: KEENU_VERSION picks a version, KEENU_CHANNEL=prerelease allows test versions, KEENU_YES=1 asks
-# nothing, KEENU_MANIFEST_URL points at another manifest. -Uninstall takes Keenu off again; your data stays.
+# Environment: KEENU_VERSION picks a version, KEENU_CHANNEL=prerelease prefers test versions, KEENU_YES=1 asks nothing,
+# KEENU_NO_START=1 does not start it, KEENU_MANIFEST_URL points at another manifest. -Uninstall takes Keenu off again;
+# your data stays.
 param([switch]$Uninstall)
 
+# All of it in its own scope, as `iex` would otherwise leave these settings and functions in the caller's window, and
+# stops by throwing, as `exit` under `iex` would close that window with the reason still on it.
+$KeenuFailed = $false
+try {
+& {
+param([bool]$Uninstall)
+
 $ErrorActionPreference = 'Stop'
-# Set by the release workflow when it publishes this script.
-$DefaultManifest = 'https://YOUR-KEENU-DOMAIN/keenu-release.json'
+$DefaultManifest = 'https://raw.githubusercontent.com/groot-code24/keenu/main/website/keenu-release.json'
+$RemoveCommand = '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1))) -Uninstall'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\Keenu'
 
 function Say($text) { Write-Host "==> $text" -ForegroundColor Cyan }
-function Stop-With($text) { Write-Host "Keenu: $text" -ForegroundColor Red; exit 1 }
+function Stop-With($text) { Write-Host "Keenu: $text" -ForegroundColor Red; throw 'keenu-stopped' }
 
 function Test-SecureUrl([string]$url) {
     if ($url -match '^https://') { return $true }
@@ -78,12 +86,9 @@ function Invoke-Uninstall {
     Say 'Keenu is removed.'
 }
 
-if ($Uninstall) { Invoke-Uninstall; exit 0 }
+if ($Uninstall) { Invoke-Uninstall; return }
 
 $manifestUrl = if ($env:KEENU_MANIFEST_URL) { $env:KEENU_MANIFEST_URL } else { $DefaultManifest }
-if ($manifestUrl -match 'YOUR-KEENU-DOMAIN') {
-    Stop-With 'this copy of the installer is not set up with a release address yet. Set KEENU_MANIFEST_URL, or install from a release page.'
-}
 if (-not (Test-SecureUrl $manifestUrl)) { Stop-With "$manifestUrl is not a secure address." }
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -98,39 +103,49 @@ if ($build -lt 19041) { Stop-With "Keenu needs Windows 10 version 2004 or newer;
 Say "Looking up the release for $platform"
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = 'SilentlyContinue'
-try { $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing }
-catch { Stop-With "could not fetch the release list from $manifestUrl : $($_.Exception.Message)" }
-if ($manifest.product -ne 'Keenu') { Stop-With 'that address does not hold a Keenu release list.' }
-
-$allowPre = $env:KEENU_CHANNEL -eq 'prerelease'
-$candidates = @($manifest.releases | Where-Object {
-    if ($env:KEENU_VERSION) { $_.version -eq $env:KEENU_VERSION } else { $allowPre -or $_.channel -eq 'stable' }
-})
-if (-not $candidates) { Stop-With 'no matching release is published.' }
-$release = $candidates[0]
-$artifacts = @($release.artifacts | Where-Object { $_.platform -eq $platform })
-$artifact = $null
-foreach ($kind in 'msi', 'exe', 'zip') {
-    $artifact = $artifacts | Where-Object { $_.kind -eq $kind } | Select-Object -First 1
-    if ($artifact) { break }
-}
-if (-not $artifact) { Stop-With "release $($release.version) has nothing for $platform." }
-if (-not (Test-SecureUrl $artifact.url)) { Stop-With "$($artifact.url) is not a secure address." }
-
-$existing = Get-ExistingVersion
-if ($existing) { Say "Keenu $existing is installed; your settings and data will be kept" }
-
-if (-not $artifact.signature.signed) {
-    Write-Host "Note: $($artifact.file_name) is not code signed, so Windows may warn about it. Its checksum is still checked." -ForegroundColor Yellow
-}
-if ($env:KEENU_YES -ne '1' -and [Environment]::UserInteractive) {
-    $answer = Read-Host "Install Keenu $($release.version) ($($artifact.kind)) to $InstallDir? [Y/n]"
-    if ($answer -and $answer -notmatch '^[Yy]') { Say 'Nothing was changed.'; exit 0 }
-}
-
 $work = Join-Path ([IO.Path]::GetTempPath()) ("keenu-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $work | Out-Null
 try {
+    # Saved and read as UTF-8, as a host may call it plain text, which would leave Invoke-RestMethod with a string.
+    $listFile = Join-Path $work 'keenu-release.json'
+    try { Invoke-WebRequest -Uri $manifestUrl -OutFile $listFile -UseBasicParsing }
+    catch { Stop-With "could not fetch the release list from $manifestUrl : $($_.Exception.Message)" }
+    $manifest = [IO.File]::ReadAllText($listFile) | ConvertFrom-Json
+    if ($manifest.product -ne 'Keenu') { Stop-With 'that address does not hold a Keenu release list.' }
+
+    $releases = @($manifest.releases)
+    if ($env:KEENU_VERSION) {
+        $candidates = @($releases | Where-Object { $_.version -eq $env:KEENU_VERSION })
+    } elseif ($env:KEENU_CHANNEL -eq 'prerelease') {
+        $candidates = $releases
+    } else {
+        # The newest stable release, or the newest at all if none is stable yet.
+        $candidates = @($releases | Where-Object { $_.channel -eq 'stable' })
+        if (-not $candidates) { $candidates = $releases }
+    }
+    if (-not $candidates) { Stop-With 'no matching release is published.' }
+    $release = $candidates[0]
+    if ($release.channel -ne 'stable') { Write-Host "Note: Keenu $($release.version) is a test version; no stable version has been released yet." -ForegroundColor Yellow }
+    $artifacts = @($release.artifacts | Where-Object { $_.platform -eq $platform })
+    $artifact = $null
+    foreach ($kind in 'msi', 'exe', 'zip') {
+        $artifact = $artifacts | Where-Object { $_.kind -eq $kind } | Select-Object -First 1
+        if ($artifact) { break }
+    }
+    if (-not $artifact) { Stop-With "release $($release.version) has nothing for $platform." }
+    if (-not (Test-SecureUrl $artifact.url)) { Stop-With "$($artifact.url) is not a secure address." }
+
+    $existing = Get-ExistingVersion
+    if ($existing) { Say "Keenu $existing is installed; your settings and data will be kept" }
+
+    if (-not $artifact.signature.signed) {
+        Write-Host "Note: $($artifact.file_name) is not code signed, so Windows may warn about it. Its checksum is still checked." -ForegroundColor Yellow
+    }
+    if ($env:KEENU_YES -ne '1' -and [Environment]::UserInteractive) {
+        $answer = Read-Host "Install Keenu $($release.version) ($($artifact.kind)) to $InstallDir? [Y/n]"
+        if ($answer -and $answer -notmatch '^[Yy]') { Say 'Nothing was changed.'; return }
+    }
+
     $file = Join-Path $work (Split-Path $artifact.file_name -Leaf)
     Say "Downloading $($artifact.file_name)"
     try { Invoke-WebRequest -Uri $artifact.url -OutFile $file -UseBasicParsing }
@@ -174,10 +189,21 @@ try {
             }
         }
     }
+
+    Say "Keenu $($release.version) is installed"
+    if ($env:KEENU_NO_START -ne '1') {
+        Start-Process -FilePath (Join-Path $InstallDir 'keenu.exe')
+        Say 'Keenu is running: look for it at the top of your screen and in the notification area.'
+    }
+    Write-Host "To remove it: $RemoveCommand"
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
-
-Say "Keenu $($release.version) is installed"
-Write-Host "Start it from the Start Menu, or run: $InstallDir\keenu.exe"
-Write-Host 'To remove it: irm <this address> -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall'
+} $Uninstall.IsPresent
+} catch {
+    $KeenuFailed = $true
+    # Stop-With has already said why.
+    if ([string]$_ -ne 'keenu-stopped') { Write-Host "Keenu: $_" -ForegroundColor Red }
+}
+# Only when run as a file: under `iex`, this would close the window.
+if ($PSCommandPath) { if ($KeenuFailed) { exit 1 } else { exit 0 } }

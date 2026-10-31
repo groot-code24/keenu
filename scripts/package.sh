@@ -21,10 +21,6 @@ cp -r gnome-extension data install.sh uninstall.sh README.md LICENSE CHANGELOG.m
 # What install.sh installs as commands: the voice set-up and the battery charge limit.
 mkdir -p "$OUT/scripts"
 install -m755 scripts/setup-voice.sh scripts/keenu-charge-limit "$OUT/scripts/"
-# Where this release comes from. Without it the extension's Update does nothing rather than fetch from a placeholder.
-if [ -n "${KEENU_RELEASE_REPOSITORY:-}" ]; then
-    grep -rl 'YOUR-GITHUB-OWNER/keenu' "$OUT/gnome-extension" | xargs -r sed -i "s|YOUR-GITHUB-OWNER/keenu|$KEENU_RELEASE_REPOSITORY|g"
-fi
 # Compiled on install, for the GLib there.
 rm -f "$OUT/gnome-extension/schemas/gschemas.compiled"
 

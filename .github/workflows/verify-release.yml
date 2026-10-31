@@ -1,0 +1,122 @@
+name: Verify release
+
+# What people actually run, against what was actually published: every download's checksum, and the one-command
+# installers on clean Windows, macOS and Linux machines. Runs after each release, and by hand at any time.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The version the release list should offer (2.0.0-alpha.1)'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  RAW: https://raw.githubusercontent.com/${{ github.repository }}/main
+
+jobs:
+  files:
+    name: Every download is there and matches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: The release list is up, and signed
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # GitHub's raw addresses keep a copy for up to five minutes.
+          for attempt in $(seq 1 40); do
+            curl -fsSL "$RAW/website/keenu-release.json" -o list.json && grep -q "\"version\": \"$VERSION\"" list.json && break
+            [ "$attempt" -lt 40 ] || { echo "::error::The release list never offered $VERSION."; exit 1; }
+            sleep 30
+          done
+          curl -fsSL "$RAW/website/keenu-release.json.sig" -o list.sig
+          curl -fsSL "$RAW/scripts/install/install.sh" -o install.sh
+          key="$(sed -n 's/^PUBLIC_KEY="\(.*\)"/\1/p' install.sh)"
+          { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; printf '%s' "$key" | base64 -d; } > key.der
+          base64 -d list.sig > list.sig.bin
+          openssl pkeyutl -verify -pubin -inkey key.der -keyform DER -rawin -in list.json -sigfile list.sig.bin
+      - name: Download each file and compare
+        run: |
+          python3 - <<'EOF'
+          import hashlib, json, sys, urllib.request
+          failed = False
+          for release in json.load(open("list.json", encoding="utf-8"))["releases"]:
+              for artifact in release["artifacts"]:
+                  with urllib.request.urlopen(artifact["url"]) as answer:
+                      body = answer.read()
+                  good = hashlib.sha256(body).hexdigest() == artifact["sha256"] and len(body) == artifact["size"]
+                  print(("ok " if good else "BAD"), artifact["platform"], artifact["kind"], artifact["file_name"], len(body))
+                  failed = failed or not good
+          sys.exit(1 if failed else 0)
+          EOF
+
+  windows:
+    name: One command on Windows
+    needs: files
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install and start, as the page says
+        shell: powershell
+        env:
+          KEENU_YES: '1'
+        run: |
+          irm "$env:RAW/scripts/install/install.ps1" | iex
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Keenu\keenu.exe'
+          if (-not (Test-Path $exe)) { Write-Host '::error::keenu.exe was not installed.'; exit 1 }
+          & $exe --version
+          Start-Sleep -Seconds 8
+          if (-not (Get-Process keenu -ErrorAction SilentlyContinue)) { Write-Host '::error::Keenu did not stay running after the installer started it.'; exit 1 }
+      - name: Remove it
+        shell: powershell
+        run: |
+          & ([scriptblock]::Create((irm "$env:RAW/scripts/install/install.ps1"))) -Uninstall
+          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\Keenu\keenu.exe')) { Write-Host '::error::keenu.exe is still there.'; exit 1 }
+
+  macos:
+    name: One command on macOS (${{ matrix.arch }})
+    needs: files
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, os: macos-14 }
+          - { arch: x64, os: macos-15-intel }
+    steps:
+      - name: Install and start, as the page says
+        env:
+          KEENU_YES: '1'
+        run: |
+          curl -fsSL "$RAW/scripts/install/install.sh" | sh
+          sleep 10
+          pgrep -x Keenu || { echo '::error::Keenu did not stay running after the installer started it.'; exit 1; }
+      - name: Remove it
+        run: |
+          curl -fsSL "$RAW/scripts/install/install.sh" | sh -s -- --uninstall
+          test ! -e "$HOME/Applications/Keenu.app"
+
+  linux:
+    name: One command on ${{ matrix.image }}
+    needs: files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:13', 'ubuntu:24.04', 'fedora:43']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install with the one command, then start a headless GNOME Shell
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: scripts/ci/logged.sh docker run --rm -v "$PWD:/src:ro" "$IMAGE" /src/scripts/ci/smoke-test.sh "$RAW/scripts/install/install.sh"

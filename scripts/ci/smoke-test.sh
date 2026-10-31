@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 zickrian
-# Run as root in a throwaway container: installs an Keenu package (tarball, .deb, .rpm or Arch) and a headless
-# GNOME Shell as "tester", failing on any "JS ERROR", the extension not loading, or keenud never on the bus.
+# Run as root in a throwaway container: installs an Keenu package (tarball, .deb, .rpm or Arch), or runs the
+# one-command installer given as an https:// address or a path ending in install.sh, and a headless GNOME Shell as
+# "tester", failing on any "JS ERROR", the extension not loading, or keenud never on the bus.
 set -euo pipefail
 
 UUID="isle@zickrian.github.io"
@@ -23,11 +24,11 @@ install_shell() {
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends gnome-shell mutter xwayland dbus dbus-user-session \
             libglib2.0-bin gnome-shell-common gir1.2-gtk-4.0 libgtk-4-1 adwaita-icon-theme fonts-cantarell \
-            librsvg2-common fontconfig curl ca-certificates procps util-linux >/dev/null
+            librsvg2-common fontconfig curl ca-certificates procps util-linux python3 >/dev/null
     elif command -v dnf >/dev/null; then
         dnf -y -q install --setopt=install_weak_deps=False gnome-shell xorg-x11-server-Xwayland dbus-daemon \
             dbus-tools glib2 librsvg2 adwaita-icon-theme mesa-dri-drivers fontconfig curl tar findutils \
-            procps-ng util-linux shadow-utils
+            procps-ng util-linux shadow-utils python3
     elif command -v pacman >/dev/null; then
         pacman -Syu --noconfirm --needed gnome-shell xorg-xwayland dbus glib2 librsvg adwaita-icon-theme \
             fontconfig curl procps-ng util-linux >/dev/null
@@ -39,9 +40,10 @@ install_shell() {
 # As root: the system around the shell, then the session as "tester".
 main() {
     local package="${1:-}"
-    [ -f "$package" ] || fail "usage: $0 <keenu-….tar.gz | keenu_….deb | keenu-….rpm | keenu-bin-….pkg.tar.zst>"
+    [ -f "$package" ] || [[ "$package" == https://* ]] ||
+        fail "usage: $0 <keenu-….tar.gz | keenu_….deb | keenu-….rpm | keenu-bin-….pkg.tar.zst | install.sh | https://…/install.sh>"
     [ "$(id -u)" -eq 0 ] || fail "run this as root, in a throwaway container."
-    package="$(readlink -f "$package")"
+    [[ "$package" == https://* ]] || package="$(readlink -f "$package")"
 
     if ! command -v gnome-shell >/dev/null || ! command -v dbus-run-session >/dev/null; then
         say "Installing GNOME Shell"
@@ -59,7 +61,7 @@ main() {
         *.pkg.tar.zst)
             say "Installing $(basename "$package")"
             pacman -U --noconfirm "$package" >/dev/null ;;
-        *.tar.gz) ;;
+        *.tar.gz | *install.sh) ;;
         *) fail "unknown package type: $package" ;;
     esac
 
@@ -77,17 +79,26 @@ main() {
     local script
     script="$(readlink -f "$0")"
     # A copy the user can read, wherever the package is.
-    install -D -m 644 "$package" "/tmp/keenu-smoke/$(basename "$package")"
+    if [[ "$package" != https://* ]]; then
+        install -D -m 644 "$package" "/tmp/keenu-smoke/$(basename "$package")"
+        package="/tmp/keenu-smoke/$(basename "$package")"
+    fi
     runuser -u tester -- env -i HOME="/home/tester" USER=tester PATH="/home/tester/.local/bin:$PATH" \
-        XDG_RUNTIME_DIR="/run/user/$uid" GSETTINGS_BACKEND=keyfile LANG=C.UTF-8 \
-        dbus-run-session -- bash "$script" --session "/tmp/keenu-smoke/$(basename "$package")" "$(dirname "$script")/../.."
+        XDG_RUNTIME_DIR="/run/user/$uid" GSETTINGS_BACKEND=keyfile LANG=C.UTF-8 KEENU_MANIFEST_URL="${KEENU_MANIFEST_URL:-}" \
+        dbus-run-session -- bash "$script" --session "$package" "$(dirname "$script")/../.."
 }
 
 # As "tester", on a fresh session bus: install for the user if a tarball, then run the shell.
 session() {
     local package="$1"
     cd "$HOME"
-    if [[ "$package" == *.tar.gz ]]; then
+    if [[ "$package" == https://* ]]; then
+        say "Installing with the one command from $package"
+        curl -fsSL "$package" | KEENU_YES=1 sh
+    elif [[ "$package" == *install.sh ]]; then
+        say "Installing with the one command, from $KEENU_MANIFEST_URL"
+        KEENU_YES=1 sh "$package"
+    elif [[ "$package" == *.tar.gz ]]; then
         say "Installing $(basename "$package") with its install.sh"
         mkdir -p "$HOME/unpacked"
         tar -xzf "$package" -C "$HOME/unpacked"

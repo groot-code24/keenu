@@ -141,7 +141,7 @@ your windows uncovered.
 1. Run this in a terminal:
 
    ```sh
-   curl -fsSL https://YOUR-KEENU-DOMAIN/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh
    ```
 
 2. **Log out and back in**: GNOME Shell on Wayland only loads a new
@@ -185,7 +185,7 @@ one-line install above:
 
 ```sh
 sudo pacman -S --needed base-devel git
-git clone --depth 1 https://github.com/YOUR-GITHUB-OWNER/keenu.git
+git clone --depth 1 https://github.com/groot-code24/keenu.git
 cd keenu/packaging/aur
 makepkg -si
 # Log out and back in, then:
@@ -199,7 +199,7 @@ above, which would add a second copy in your home folder.
 A copy installed with the command above, in your home folder, takes
 precedence over a system-wide package; `keenu-uninstall` removes it and the
 package's takes over. Releases can be checked with
-`gh attestation verify <file> --repo YOUR-GITHUB-OWNER/keenu` (see
+`gh attestation verify <file> --repo groot-code24/keenu` (see
 [SECURITY.md](../SECURITY.md#verifying-a-release)).
 
 <details>
@@ -224,7 +224,7 @@ the GPU the Vulkan headers and glslc:
 sudo apt install git build-essential pkg-config libgtk-4-dev cmake libclang-dev libvulkan-dev glslc
 # Fedora: git gcc-c++ pkgconf gtk4-devel cmake clang-devel vulkan-loader-devel glslc
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-git clone https://github.com/YOUR-GITHUB-OWNER/keenu.git
+git clone https://github.com/groot-code24/keenu.git
 cd keenu
 ./install.sh
 ```

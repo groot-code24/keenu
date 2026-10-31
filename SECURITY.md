@@ -30,7 +30,7 @@ the tagged source and carry a build provenance attestation. With the
 [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify keenu-<version>-x86_64-linux.tar.gz --repo YOUR-GITHUB-OWNER/keenu
+gh attestation verify keenu-<version>-x86_64-linux.tar.gz --repo groot-code24/keenu
 ```
 
 `install.sh` and `install.ps1` check each download against the SHA-256 in the release manifest, and `install.sh` checks
