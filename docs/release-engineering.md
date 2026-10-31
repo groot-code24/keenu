@@ -9,7 +9,7 @@ Most of this has working defaults, set in the workflows. These are the repositor
 
 | Where | What | Needed for |
 |---|---|---|
-| `secrets.KEENU_UPDATE_SECRET_KEY` | The secret half of `keenu-release keygen`. The public half is in `scripts/install/install.sh` and the workflows | Signed manifests. **Releases refuse to run without it** |
+| `secrets.KEENU_UPDATE_SECRET_KEY` | The secret half of `keenu-release keygen`. The public half is in `scripts/install/install.sh` and the workflows | Signs manifests in the workflow. Without it, sign them yourself: see below |
 | `vars.KEENU_PUBLISHER` | Your legal name, as on your certificate | MSI manufacturer. "Keenu contributors" until set |
 | `secrets.KEENU_SIGNING_CERT_BASE64`, `KEENU_SIGNING_CERT_PASSWORD`, `vars.KEENU_SIGNING_THUMBPRINT` | A code-signing certificate (PFX) | Windows signing, and the updater. **Not set: installers are unsigned** |
 | `vars.KEENU_REQUIRE_SIGNING = true` | | Refuses a stable release that would be unsigned |
@@ -42,6 +42,17 @@ the new one.
 6. Attests provenance, and creates the GitHub release.
 7. Commits the signed manifest to `website/` on `main`, where the website and the install scripts read it. Only now can
    anyone be offered this release, so a list never names a file that is not there.
+
+   **With the key kept off GitHub,** the workflow stops after step 6, offering the release to nobody. Then, on the computer
+   with the key, from the repository's root, on `main`:
+
+   ```sh
+   node scripts/sign-release-list.mjs <version> <file holding the secret key>
+   git add website/keenu-release.json website/keenu-release.json.sig
+   git commit -m "Release list for v<version>" && git push
+   ```
+
+   That push starts step 8.
 8. Runs [verify-release.yml](../.github/workflows/verify-release.yml): downloads every published file and compares it,
    then runs the real one-command installers on clean Windows, macOS and Linux machines. Run it by hand from the Actions
    tab at any time.

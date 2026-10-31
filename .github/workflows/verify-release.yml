@@ -1,9 +1,13 @@
 name: Verify release
 
 # What people actually run, against what was actually published: every download's checksum, and the one-command
-# installers on clean Windows, macOS and Linux machines. Runs after each release, and by hand at any time.
+# installers on clean Windows, macOS and Linux machines. Runs after each release, when a release list signed elsewhere
+# reaches main, and by hand at any time.
 
 on:
+  push:
+    branches: [main]
+    paths: ['website/keenu-release.json']
   workflow_call:
     inputs:
       version:
@@ -13,7 +17,7 @@ on:
     inputs:
       version:
         description: 'The version the release list should offer (2.0.0-alpha.1)'
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -31,18 +35,19 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          # GitHub's raw addresses keep a copy for up to five minutes.
-          for attempt in $(seq 1 40); do
-            curl -fsSL "$RAW/website/keenu-release.json" -o list.json && grep -q "\"version\": \"$VERSION\"" list.json && break
-            [ "$attempt" -lt 40 ] || { echo "::error::The release list never offered $VERSION."; exit 1; }
-            sleep 30
-          done
-          curl -fsSL "$RAW/website/keenu-release.json.sig" -o list.sig
           curl -fsSL "$RAW/scripts/install/install.sh" -o install.sh
           key="$(sed -n 's/^PUBLIC_KEY="\(.*\)"/\1/p' install.sh)"
           { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; printf '%s' "$key" | base64 -d; } > key.der
-          base64 -d list.sig > list.sig.bin
-          openssl pkeyutl -verify -pubin -inkey key.der -keyform DER -rawin -in list.json -sigfile list.sig.bin
+          # GitHub's raw addresses keep a copy for up to five minutes, of each file separately.
+          for attempt in $(seq 1 40); do
+            if curl -fsSL "$RAW/website/keenu-release.json" -o list.json && curl -fsSL "$RAW/website/keenu-release.json.sig" -o list.sig &&
+              grep -q "\"version\": \"$VERSION" list.json && base64 -d list.sig > list.sig.bin &&
+              openssl pkeyutl -verify -pubin -inkey key.der -keyform DER -rawin -in list.json -sigfile list.sig.bin; then
+              break
+            fi
+            [ "$attempt" -lt 40 ] || { echo "::error::The release list never offered $VERSION with a good signature."; exit 1; }
+            sleep 30
+          done
       - name: Download each file and compare
         run: |
           python3 - <<'EOF'

@@ -4,7 +4,8 @@ name: Release
 # manifest, and only then publishes. If anything fails, nothing is published.
 #
 # Repository settings it reads; see docs/release-engineering.md:
-#   secrets.KEENU_UPDATE_SECRET_KEY         signs the manifest; required
+#   secrets.KEENU_UPDATE_SECRET_KEY         signs the manifest. Without it the files are published but offered to
+#                                           nobody, until scripts/sign-release-list.mjs signs the list elsewhere
 #   vars.KEENU_PUBLISHER                    the signer's name, once there is a certificate
 #   secrets.KEENU_SIGNING_CERT_BASE64 and KEENU_SIGNING_CERT_PASSWORD, vars.KEENU_SIGNING_THUMBPRINT    Windows
 #   vars.KEENU_REQUIRE_SIGNING              when "true", a stable release without Windows signing fails
@@ -37,11 +38,6 @@ jobs:
             *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
-      - name: The signing key is in place
-        env:
-          KEENU_UPDATE_SECRET_KEY: ${{ secrets.KEENU_UPDATE_SECRET_KEY }}
-        run: |
-          [ -n "$KEENU_UPDATE_SECRET_KEY" ] || { echo "::error::Set the repository secret KEENU_UPDATE_SECRET_KEY"; exit 1; }
 
   windows:
     needs: validate
@@ -111,6 +107,8 @@ jobs:
     needs: [validate, windows, linux, macos, sign-windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      list-signed: ${{ steps.list.outputs.signed }}
     permissions:
       contents: write
       id-token: write
@@ -153,6 +151,7 @@ jobs:
           for file in keenu-*.aarch64.rpm; do rename "$file" "keenu-$VERSION-linux-arm64.rpm"; done
           ls -l
       - name: Make and sign the manifest
+        id: list
         env:
           KEENU_UPDATE_SECRET_KEY: ${{ secrets.KEENU_UPDATE_SECRET_KEY }}
           BASE: ${{ vars.KEENU_RELEASE_BASE_URL || format('https://github.com/{0}/releases/download', github.repository) }}
@@ -174,8 +173,14 @@ jobs:
             --base-url "$BASE/v$VERSION" --out release/keenu-release.json \
             --notes-url "$repository/releases/tag/v$VERSION" --github-url "$repository/releases/tag/v$VERSION" "${signed[@]}" "${earlier[@]}"
           cargo run --quiet --locked -p keenu-release -- checksums release
-          cargo run --quiet --locked -p keenu-release -- sign release/keenu-release.json --key-env KEENU_UPDATE_SECRET_KEY
-          cargo run --quiet --locked -p keenu-release -- verify release/keenu-release.json --public-key "$PUBLIC_KEY"
+          if [ -n "$KEENU_UPDATE_SECRET_KEY" ]; then
+            cargo run --quiet --locked -p keenu-release -- sign release/keenu-release.json --key-env KEENU_UPDATE_SECRET_KEY
+            cargo run --quiet --locked -p keenu-release -- verify release/keenu-release.json --public-key "$PUBLIC_KEY"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No signing key here: nobody is offered this release until scripts/sign-release-list.mjs signs its list."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: No placeholder in anything published
         run: |
           # GitHub user names are free to register, so a placeholder left in a package could be claimed by anyone.
@@ -206,6 +211,7 @@ jobs:
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
           gh release create "$tag" release/* --title "Keenu ${tag#v}" --notes-file notes.md "${flags[@]}"
       - name: Put the release list where the website and the install scripts read it
+        if: steps.list.outputs.signed == 'true'
         run: |
           # After the release: a list never names a file that is not there yet.
           git config user.name 'github-actions[bot]'
@@ -219,6 +225,7 @@ jobs:
   verify:
     name: What was published works
     needs: [validate, publish]
+    if: needs.publish.outputs.list-signed == 'true'
     uses: ./.github/workflows/verify-release.yml
     with:
       version: ${{ needs.validate.outputs.version }}
