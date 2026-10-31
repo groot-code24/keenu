@@ -1,0 +1,22 @@
+[package]
+name = "keenu-security"
+description = "Keenu's secrets and integrity checks: OS credential stores, release signatures, replay protection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Only what verifying a signature and a checksum needs: audited, pure Rust, no C to build.
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
+getrandom = "0.3"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"

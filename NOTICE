@@ -1,0 +1,20 @@
+Keenu
+Licensed under the GNU General Public License, version 3 or later: see LICENSE.
+
+Keenu is a modified version of Isle by zickrian (https://github.com/zickrian/isle), also published
+under GPL-3.0-or-later, and later renamed Neeru. As GPL section 5(a) requires, this states that the work has
+been modified. The changes begin at the rename to Keenu, version 2.0.0-alpha.1: see CHANGELOG.md. Files carrying
+"Copyright (C) 2026 zickrian" keep that notice. Internal identifiers such as the D-Bus name
+io.github.zickrian.isle.* and the GNOME extension id isle@zickrian.github.io are kept for compatibility with
+existing installations; they do not mean the original author publishes, endorses or supports Keenu.
+
+Included works, each under its own terms:
+
+- Inter typeface (data/fonts): SIL Open Font License 1.1, see data/fonts/Inter-LICENSE.txt.
+- bloub, by Jérémy Perret, the assistant's expressions: MIT, see gnome-extension/NOTICE-bloub.txt.
+- Lucide, the calendar icon's shape: ISC, see gnome-extension/NOTICE-lucide.txt.
+- Simple Icons (CC0), the Claude and OpenAI logos on the AI usage page. These are trademarks of Anthropic and
+  OpenAI, shown only to name their plans.
+
+Lyrics are looked up, when the user turns that on, from LRCLIB (https://lrclib.net). Rust crates are listed in
+Cargo.lock; their licences are checked by `cargo deny` against deny.toml.

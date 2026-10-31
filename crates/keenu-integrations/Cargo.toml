@@ -1,0 +1,33 @@
+[package]
+name = "keenu-integrations"
+description = "Keenu's connections to outside services and programs: calendars, OAuth, lyrics, speech APIs, coding agents, updates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+keenu-core.workspace = true
+keenu-security.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+# Time zones of calendar events, by the IANA names servers send; recurring events cannot be right without them.
+chrono-tz = "0.10"
+log.workspace = true
+# CalDAV's multistatus answers. Pinned: 0.38 changed how entities are read.
+quick-xml = "0.42"
+serde.workspace = true
+# Keeps the keys of an agent's settings in their order when its hooks are changed.
+serde_json = { workspace = true, features = ["preserve_order"] }
+toml_edit.workspace = true
+
+# The operating system's own TLS where there is one, so its certificates and proxies are trusted and
+# nothing extra is compiled; rustls on Linux, whose OpenSSL differs from one distribution to the next.
+[target.'cfg(target_os = "linux")'.dependencies]
+ureq.workspace = true
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["native-tls", "json"] }

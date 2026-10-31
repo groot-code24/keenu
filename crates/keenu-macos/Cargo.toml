@@ -1,0 +1,30 @@
+[package]
+name = "keenu-macos"
+description = "Keenu's native macOS host: the island in AppKit, with the menu bar and system integrations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keenu-macos"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keenu-app.workspace = true
+keenu-core.workspace = true
+keenu-platform.workspace = true
+keenu-security.workspace = true
+keenu-ui.workspace = true
+log.workspace = true
+
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSDate", "NSDictionary", "NSGeometry", "NSObject", "NSRunLoop", "NSTimer", "NSThread", "NSURL", "NSAttributedString", "NSValue", "NSProcessInfo"] }
+objc2-app-kit = { version = "0.3", features = [
+  "NSApplication", "NSBezierPath", "NSButton", "NSColor", "NSControl", "NSEvent", "NSFont", "NSGraphics",
+  "NSGraphicsContext", "NSImage", "NSMenu", "NSMenuItem", "NSPanel", "NSParagraphStyle", "NSPasteboard",
+  "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSScreen", "NSStatusBar", "NSStatusBarButton",
+  "NSStatusItem", "NSStringDrawing", "NSText", "NSView", "NSWindow", "NSWorkspace", "NSAttributedString",
+] }

@@ -1,0 +1,88 @@
+name: Linux
+
+# The daemon, the extension and their packages, ending with each package installed in a container and a real,
+# headless GNOME Shell loading the extension.
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, test and package (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          # man-db's index rebuild can stall apt for many minutes on the runners; nothing here needs it.
+          sudo rm -f /var/lib/man-db/auto-update
+          # A mirror that stops answering fails and is tried again, rather than hanging the job.
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
+            sudo tee /etc/apt/apt.conf.d/99retries >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev cmake g++ clang libclang-dev libvulkan-dev glslc rpm file
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint
+        run: cargo clippy --locked -p keenu-daemon -p keenu-shelf -p keenu-whisper --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked -p keenu-daemon -p keenu-shelf -p keenu-whisper -p keenu-core -p keenu-integrations
+      - name: Package
+        env:
+          KEENU_MAINTAINER: ${{ vars.KEENU_MAINTAINER }}
+          KEENU_RELEASE_REPOSITORY: ${{ vars.KEENU_RELEASE_REPOSITORY }}
+        run: |
+          tarball="$(scripts/package.sh | tail -n1)"
+          scripts/package-system.sh "$tarball"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keenu-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  smoke:
+    name: Install ${{ matrix.package }} on ${{ matrix.image }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'ubuntu:24.04', package: tarball }
+          - { image: 'ubuntu:24.04', package: deb }
+          - { image: 'debian:13', package: deb }
+          - { image: 'fedora:43', package: rpm }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-linux-x64
+          path: dist
+      - name: Install Keenu and start a headless GNOME Shell
+        env:
+          IMAGE: ${{ matrix.image }}
+          KIND: ${{ matrix.package }}
+        run: |
+          case "$KIND" in
+            tarball) package="$(ls dist/keenu-*-linux.tar.gz)" ;;
+            deb) package="$(ls dist/keenu_*.deb)" ;;
+            rpm) package="$(ls dist/keenu-*.rpm)" ;;
+          esac
+          docker run --rm -v "$PWD:/src:ro" "$IMAGE" /src/scripts/ci/smoke-test.sh "/src/$package"

@@ -1,0 +1,118 @@
+name: Windows
+
+# The real program on real Windows: built with MSVC, its tests against real Windows APIs, its installers made
+# and put through install, upgrade and removal. Hosted runners have one display and no microphone, so what
+# needs those stays on docs/feature-acceptance-matrix.md for a person to run.
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: ''
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          # Built only: nothing has run on Windows on ARM yet.
+          - { arch: arm64, os: windows-latest, target: aarch64-pc-windows-msvc, build_only: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint
+        if: ${{ !matrix.build_only }}
+        run: cargo clippy --locked -p keenu-windows --all-targets -- -D warnings
+      - name: Test against real Windows APIs
+        if: ${{ !matrix.build_only }}
+        run: cargo test --locked -p keenu-windows -p keenu-app -p keenu-security
+      - name: Build
+        env:
+          KEENU_SIGNING_THUMBPRINT: ${{ vars.KEENU_SIGNING_THUMBPRINT }}
+          KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
+          KEENU_UPDATE_PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          KEENU_GOOGLE_CLIENT_ID: ${{ vars.KEENU_GOOGLE_CLIENT_ID }}
+          KEENU_GOOGLE_CLIENT_SECRET: ${{ vars.KEENU_GOOGLE_CLIENT_SECRET }}
+          KEENU_MICROSOFT_CLIENT_ID: ${{ vars.KEENU_MICROSOFT_CLIENT_ID }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p keenu-windows -p keenu-release
+      - name: The program carries its name and version
+        shell: pwsh
+        run: |
+          $info = (Get-Item target\${{ matrix.target }}\release\keenu.exe).VersionInfo
+          if ($info.ProductName -ne 'Keenu') { throw "ProductName is '$($info.ProductName)'" }
+      - name: Drive the real program on the runner's desktop
+        if: ${{ !matrix.build_only }}
+        shell: powershell
+        run: .\scripts\windows\smoke-test.ps1 -Exe target\${{ matrix.target }}\release\keenu.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keenu-windows-${{ matrix.arch }}-exe
+          path: |
+            target/${{ matrix.target }}/release/keenu.exe
+            target/${{ matrix.target }}/release/keenu-release.exe
+          if-no-files-found: error
+
+  package:
+    name: Installers (x64)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-windows-x64-exe
+          path: built
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends wixl nsis zip
+      - name: Make the installers
+        env:
+          KEENU_PUBLISHER: ${{ vars.KEENU_PUBLISHER }}
+        run: |
+          version="${{ inputs.version }}"
+          scripts/windows/package.sh built/keenu.exe "${version:-}" x64
+          # The older version the upgrade test starts from.
+          scripts/windows/package.sh built/keenu.exe 0.0.2 x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keenu-windows-x64-packages
+          path: dist/*
+          if-no-files-found: error
+
+  installers:
+    name: Install, upgrade and remove
+    needs: [build, package]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-windows-x64-exe
+          path: built
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-windows-x64-packages
+          path: dist
+      - shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          python scripts/windows/installer_test.py `
+            --msi "dist/Keenu-$version-windows-x64.msi" --old-msi dist/Keenu-0.0.2-windows-x64.msi `
+            --setup "dist/Keenu-$version-windows-x64-setup.exe" --zip "dist/Keenu-$version-windows-x64-portable.zip" `
+            --release-tool built/keenu-release.exe --version $version

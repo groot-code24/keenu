@@ -1,0 +1,22 @@
+[package]
+name = "keenu-app"
+description = "Keenu's application logic for hosts that draw the island themselves, independent of the operating system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+keenu-core.workspace = true
+keenu-integrations.workspace = true
+keenu-platform.workspace = true
+keenu-security.workspace = true
+keenu-ui.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true

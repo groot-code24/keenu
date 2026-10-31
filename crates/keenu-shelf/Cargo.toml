@@ -1,0 +1,19 @@
+[package]
+name = "keenu-shelf"
+description = "Drag-and-drop window for Keenu's file shelf, placed over the island by the GNOME extension"
+version.workspace = true
+edition.workspace = true
+# What gtk-rs 0.11 needs.
+rust-version = "1.92"
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+env_logger.workspace = true
+gdk4-x11.workspace = true
+gtk4.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+x11rb.workspace = true

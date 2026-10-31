@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keenu</title>
+<meta name="description" content="A notch-style desktop island: music with synced lyrics, your calendar, a clipboard history, a file shelf, voice, and coding agents asking you right there.">
+<style>
+  :root { color-scheme: dark; --bg: #000; --text: #fff; --muted: #8e8e93; --line: #2c2c2e; --accent: #fff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 16px; }
+  h1 { font-size: 40px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 40px 0 12px; }
+  p { color: var(--muted); margin: 8px 0; }
+  a { color: var(--text); }
+  #recommended { display: inline-block; margin: 16px 0 8px; padding: 12px 24px; border-radius: 24px; background: var(--accent); color: #000; font-weight: 600; text-decoration: none; }
+  #recommended[hidden] { display: none; }
+  pre { background: #1c1c1e; border-radius: 10px; padding: 12px 16px; overflow-x: auto; font-size: 14px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td, th { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .sum { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); }
+  #checksum { font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Keenu</h1>
+  <p>A notch-style island for your desktop: music with synced lyrics, your calendar, a clipboard history, a file shelf, voice, and coding agents asking you right there. Everything that watches, listens or reaches the network starts off. Free software, under the GPL.</p>
+
+  <p id="status">Looking for the latest release...</p>
+  <a id="recommended" hidden>Download</a>
+  <p id="requirements"></p>
+  <p id="signature"></p>
+  <p id="checksum"></p>
+
+  <section id="others-section" hidden>
+    <h2>All downloads</h2>
+    <div class="scroll"><table><thead><tr><th>File</th><th>For</th><th>Size</th><th>Signature</th><th>SHA-256</th></tr></thead><tbody id="others"></tbody></table></div>
+  </section>
+  <p id="links"></p>
+
+  <h2>Install from a terminal</h2>
+  <p>Linux and macOS:</p>
+  <pre>curl -fsSL https://YOUR-KEENU-DOMAIN/install.sh | sh</pre>
+  <p>Windows PowerShell:</p>
+  <pre>irm https://YOUR-KEENU-DOMAIN/install.ps1 | iex</pre>
+  <p>To read a script before running it, which is a good idea with any script from the internet:</p>
+  <pre>curl -fsSLO https://YOUR-KEENU-DOMAIN/install.sh
+less install.sh
+sh install.sh</pre>
+  <p>Each checks its download against the published SHA-256 before installing, and needs no development tools.</p>
+  <p>On Linux, Keenu is a GNOME Shell extension and needs GNOME Shell 46 to 51. See the <a href="https://github.com/YOUR-GITHUB-OWNER/keenu">source code</a> for what works on each system.</p>
+</main>
+<script type="module" src="./download.js"></script>
+</body>
+</html>

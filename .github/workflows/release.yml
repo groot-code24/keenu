@@ -1,0 +1,215 @@
+name: Release
+
+# On a version tag (v2.0.0): checks the version, runs every system's workflow, signs what it can, makes the
+# manifest, and only then publishes. If anything fails, nothing is published.
+#
+# Repository settings it reads; see docs/release-engineering.md:
+#   vars.KEENU_RELEASE_BASE_URL, KEENU_UPDATE_MANIFEST_URL, KEENU_UPDATE_PUBLIC_KEY, KEENU_PUBLISHER
+#   secrets.KEENU_UPDATE_SECRET_KEY         signs the manifest
+#   secrets.KEENU_SIGNING_CERT_BASE64 and KEENU_SIGNING_CERT_PASSWORD, vars.KEENU_SIGNING_THUMBPRINT    Windows
+#   vars.KEENU_REQUIRE_SIGNING              when "true", a stable release without Windows signing fails
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: The tag, the sources and the changelog agree
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$version\"" Cargo.toml || { echo "Cargo.toml is not at $version"; exit 1; }
+          grep -q "\"version-name\": \"$version\"" gnome-extension/metadata.json ||
+            { echo "metadata.json is not at $version"; exit 1; }
+          grep -q "^## \[$version\]" CHANGELOG.md || { echo "CHANGELOG.md has no $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: The release settings are in place
+        env:
+          REPOSITORY: ${{ vars.KEENU_RELEASE_REPOSITORY }}
+          BASE: ${{ vars.KEENU_RELEASE_BASE_URL }}
+          MANIFEST: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
+          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+        run: |
+          [ -n "$REPOSITORY" ] || { echo "Set the repository variable KEENU_RELEASE_REPOSITORY"; exit 1; }
+          [ -n "$BASE" ] || { echo "Set the repository variable KEENU_RELEASE_BASE_URL"; exit 1; }
+          [ -n "$MANIFEST" ] || { echo "Set the repository variable KEENU_UPDATE_MANIFEST_URL"; exit 1; }
+          [ -n "$PUBLIC_KEY" ] || { echo "Set the repository variable KEENU_UPDATE_PUBLIC_KEY"; exit 1; }
+
+  windows:
+    needs: validate
+    uses: ./.github/workflows/windows.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+    secrets: inherit
+
+  linux:
+    needs: validate
+    uses: ./.github/workflows/linux.yml
+    secrets: inherit
+
+  macos:
+    needs: validate
+    uses: ./.github/workflows/macos.yml
+    secrets: inherit
+
+  sign-windows:
+    name: Sign the Windows packages
+    needs: [validate, windows]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-windows-x64-packages
+          path: dist
+      - id: sign
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.KEENU_SIGNING_CERT_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.KEENU_SIGNING_CERT_PASSWORD }}
+          THUMBPRINT: ${{ vars.KEENU_SIGNING_THUMBPRINT }}
+          REQUIRE: ${{ vars.KEENU_REQUIRE_SIGNING }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          Remove-Item dist\Keenu-0.0.2-* -ErrorAction SilentlyContinue
+          if (-not $env:PFX_BASE64) {
+            if ($env:REQUIRE -eq 'true' -and $env:PRERELEASE -ne 'true') { throw 'A stable release needs Windows signing, and no certificate is set.' }
+            Write-Host 'No certificate is set: these packages stay unsigned, and the manifest says so.'
+            "signed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          if ($env:THUMBPRINT -notmatch '^[A-Fa-f0-9]{40}$') { throw 'KEENU_SIGNING_THUMBPRINT must be a 40-character thumbprint.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'keenu-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          try {
+            foreach ($file in Get-ChildItem dist -Include *.msi, *-setup.exe -Recurse) {
+              signtool.exe sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:PFX_PASSWORD $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "Could not sign $($file.Name)." }
+              signtool.exe verify /pa $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "$($file.Name) does not verify." }
+              if ((Get-AuthenticodeSignature $file.FullName).SignerCertificate.Thumbprint -ne $env:THUMBPRINT) { throw 'Signed by the wrong certificate.' }
+            }
+          } finally { Remove-Item $pfx -Force }
+          "signed=true" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keenu-windows-x64-release
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, windows, linux, macos, sign-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-windows-x64-release
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-linux-x64
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-linux-arm64
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-macos-arm64
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: keenu-macos-x64
+          path: release
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Names that say what each file is for
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          cd release
+          rm -f ./*.sha256
+          rename() { [ -f "$1" ] && mv "$1" "$2"; return 0; }
+          rename "keenu-$VERSION-x86_64-linux.tar.gz" "keenu-$VERSION-linux-x64.tar.gz"
+          rename "keenu-$VERSION-aarch64-linux.tar.gz" "keenu-$VERSION-linux-arm64.tar.gz"
+          for file in keenu_*_amd64.deb; do rename "$file" "keenu-$VERSION-linux-x64.deb"; done
+          for file in keenu_*_arm64.deb; do rename "$file" "keenu-$VERSION-linux-arm64.deb"; done
+          for file in keenu-*.x86_64.rpm; do rename "$file" "keenu-$VERSION-linux-x64.rpm"; done
+          for file in keenu-*.aarch64.rpm; do rename "$file" "keenu-$VERSION-linux-arm64.rpm"; done
+          ls -l
+      - name: Make and sign the manifest
+        env:
+          KEENU_UPDATE_SECRET_KEY: ${{ secrets.KEENU_UPDATE_SECRET_KEY }}
+          BASE: ${{ vars.KEENU_RELEASE_BASE_URL }}
+          SIGNED: ${{ needs.sign-windows.outputs.signed }}
+          PUBLISHER: ${{ vars.KEENU_PUBLISHER }}
+          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          signed=()
+          if [ "$SIGNED" = true ]; then
+            signed=(--signed "msi=authenticode:$PUBLISHER" --signed "exe=authenticode:$PUBLISHER")
+          fi
+          repository="https://github.com/$GITHUB_REPOSITORY"
+          cargo run --quiet --locked -p keenu-release -- manifest release --version "$VERSION" \
+            --base-url "$BASE/v$VERSION" --out release/keenu-release.json \
+            --notes-url "$repository/releases/tag/v$VERSION" --github-url "$repository/releases/tag/v$VERSION" "${signed[@]}"
+          cargo run --quiet --locked -p keenu-release -- checksums release
+          [ -n "$KEENU_UPDATE_SECRET_KEY" ] || { echo "Set the secret KEENU_UPDATE_SECRET_KEY"; exit 1; }
+          cargo run --quiet --locked -p keenu-release -- sign release/keenu-release.json --key-env KEENU_UPDATE_SECRET_KEY
+          cargo run --quiet --locked -p keenu-release -- verify release/keenu-release.json --public-key "$PUBLIC_KEY"
+      - name: No placeholder in anything published
+        run: |
+          # GitHub user names are free to register, so a placeholder left in a package could be claimed by anyone.
+          mkdir -p check
+          tar -xzf release/keenu-*-linux-x64.tar.gz -C check
+          if grep -rl 'YOUR-GITHUB-OWNER' check; then echo "A placeholder is left in the Linux package."; exit 1; fi
+      - name: Point the install scripts at this release
+        env:
+          MANIFEST: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
+          PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+        run: |
+          sed -e "s|https://YOUR-KEENU-DOMAIN/keenu-release.json|$MANIFEST|" -e "s|^PUBLIC_KEY=\"\"|PUBLIC_KEY=\"$PUBLIC_KEY\"|" \
+            scripts/install/install.sh > release/install.sh
+          sed -e "s|https://YOUR-KEENU-DOMAIN/keenu-release.json|$MANIFEST|" scripts/install/install.ps1 > release/install.ps1
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release/*
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          SIGNED: ${{ needs.sign-windows.outputs.signed }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          # The version's own section of the changelog.
+          awk -v v="${tag#v}" 'index($0, "## [" v "]") == 1 {on = 1; next} /^## \[/ {on = 0} on' CHANGELOG.md > notes.md
+          {
+            printf '\n---\n\n**Signing:** Windows packages: %s. macOS: not notarized unless stated above. Linux: checksums and provenance.\n' \
+              "$([ "$SIGNED" = true ] && echo signed || echo 'not signed; Windows will warn')"
+          } >> notes.md
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$tag" release/* --title "Keenu ${tag#v}" --notes-file notes.md "${flags[@]}"

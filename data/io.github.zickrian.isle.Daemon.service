@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.zickrian.isle.Daemon
+Exec=@BINDIR@/keenud
+SystemdService=keenud.service

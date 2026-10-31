@@ -1,0 +1,57 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 zickrian
+# Sets the battery's charge limit (20-100%) and keeps it after a restart or sleep, through a small
+# systemd service; 100 removes the limit. Asks for the sudo password. Usage: keenu-charge-limit 80
+set -eu
+
+PERCENT="${1:-}"
+case "$PERCENT" in
+    '' | *[!0-9]*) echo "Usage: keenu-charge-limit <20-100>" >&2; exit 2 ;;
+esac
+if [ "$PERCENT" -lt 20 ] || [ "$PERCENT" -gt 100 ]; then
+    echo "The limit must be between 20 and 100." >&2
+    exit 2
+fi
+
+LIMIT=
+for file in /sys/class/power_supply/BAT*/charge_control_end_threshold; do
+    [ -e "$file" ] && LIMIT="$file" && break
+done
+if [ -z "$LIMIT" ]; then
+    echo "This laptop has no charge limit setting (no charge_control_end_threshold)." >&2
+    exit 1
+fi
+
+UNIT=/etc/systemd/system/keenu-charge-limit.service
+# A dry run (KEENU_DRY_RUN=1) prints what would be done instead.
+run() { if [ "${KEENU_DRY_RUN:-}" = 1 ]; then echo "+ $*"; else "$@"; fi; }
+SLEEP="suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
+
+if [ "$PERCENT" = 100 ]; then
+    run sudo sh -c "echo 100 > '$LIMIT'"
+    run sudo systemctl disable --now keenu-charge-limit.service 2>/dev/null || true
+    run sudo rm -f "$UNIT"
+    echo "Charge limit removed: the battery charges to 100%."
+    exit 0
+fi
+
+UNIT_TEXT="[Unit]
+Description=Battery charge limit of $PERCENT% (set by Keenu)
+After=multi-user.target $SLEEP
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo $PERCENT > $LIMIT'
+
+[Install]
+WantedBy=multi-user.target $SLEEP"
+
+if [ "${KEENU_DRY_RUN:-}" = 1 ]; then
+    printf '+ write %s:\n%s\n' "$UNIT" "$UNIT_TEXT"
+else
+    printf '%s\n' "$UNIT_TEXT" | sudo tee "$UNIT" >/dev/null
+fi
+run sudo systemctl daemon-reload
+run sudo systemctl enable --now keenu-charge-limit.service
+echo "Charge limit set to $PERCENT%, kept after a restart or sleep."

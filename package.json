@@ -1,0 +1,13 @@
+{
+  "name": "keenu-lint",
+  "private": true,
+  "description": "Lint tools for Keenu's GNOME Shell extension; nothing here is shipped.",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "lint": "eslint"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0"
+  }
+}

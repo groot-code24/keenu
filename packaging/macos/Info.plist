@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Keenu</string>
+  <key>CFBundleDisplayName</key>
+  <string>Keenu</string>
+  <key>CFBundleIdentifier</key>
+  <string>@BUNDLE_ID@</string>
+  <key>CFBundleExecutable</key>
+  <string>Keenu</string>
+  <key>CFBundleIconFile</key>
+  <string>Keenu</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Keenu records from the microphone only while you are recording a voice request.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Keenu asks Music and Spotify what is playing, and controls them when you press its buttons.</string>
+</dict>
+</plist>

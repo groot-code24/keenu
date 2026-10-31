@@ -1,0 +1,94 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/keenu-app",
+    "crates/keenu-core",
+    "crates/keenu-daemon",
+    "crates/keenu-integrations",
+    "crates/keenu-macos",
+    "crates/keenu-platform",
+    "crates/keenu-release",
+    "crates/keenu-security",
+    "crates/keenu-shelf",
+    "crates/keenu-ui",
+    "crates/keenu-whisper",
+    "crates/keenu-windows",
+]
+# keenu-shelf needs the GTK 4 development files, and keenu-whisper cmake, a C++
+# compiler, libclang and (for the GPU) the Vulkan headers and glslc, so they
+# are only built when asked for: `cargo build -p keenu-shelf -p keenu-whisper`.
+default-members = [
+    "crates/keenu-app",
+    "crates/keenu-core",
+    "crates/keenu-integrations",
+    "crates/keenu-platform",
+    "crates/keenu-security",
+    "crates/keenu-ui",
+]
+
+[workspace.package]
+version = "2.0.0-alpha.1"
+edition = "2024"
+# keenu-core and keenud use let chains (1.88); keenu-shelf sets its own, for gtk-rs.
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/YOUR-GITHUB-OWNER/keenu"
+# Released as programs, not on crates.io.
+publish = false
+
+[workspace.dependencies]
+keenu-app = { path = "crates/keenu-app" }
+keenu-core = { path = "crates/keenu-core" }
+keenu-integrations = { path = "crates/keenu-integrations" }
+keenu-platform = { path = "crates/keenu-platform" }
+keenu-security = { path = "crates/keenu-security" }
+keenu-ui = { path = "crates/keenu-ui" }
+
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+dirs = "6"
+# Plain log lines: the journal adds the time, and filters are simple module names.
+env_logger = { version = "0.11", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+gdk4-x11 = "0.11"
+gtk4 = { version = "0.11", features = ["v4_12"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+inotify = { version = "0.11", default-features = false, features = ["stream"] }
+libc = "0.2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Edits Codex's config.toml in place, keeping its comments and layout.
+toml_edit = { version = "0.25", default-features = false, features = ["display", "parse"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
+# No gzip: the few small JSON answers are not worth a deflate implementation.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+x11rb = "0.14"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# The service and the shelf are small and mostly wait: built for size. keenu-whisper keeps
+# full speed for transcribing.
+[profile.release.package.keenu-daemon]
+opt-level = "s"
+
+[profile.release.package.keenu-core]
+opt-level = "s"
+
+[profile.release.package.keenu-shelf]
+opt-level = "s"
+
+# Their libraries too (zbus, tokio, image, ureq...): less code for keenud to hold in memory. Not
+# whisper's, which keep full speed.
+[profile.release.package."*"]
+opt-level = "s"
+
+[profile.release.package.whisper-rs]
+opt-level = 3
+
+[profile.release.package.whisper-rs-sys]
+opt-level = 3

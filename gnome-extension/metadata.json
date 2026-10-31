@@ -1,0 +1,16 @@
+{
+  "uuid": "isle@zickrian.github.io",
+  "name": "Keenu",
+  "description": "A notch-style island for the top bar: music with synced lyrics, calls, a focus timer beside your reminders, a calendar, a file shelf, app usage, charging and system alerts, and a voice assistant that works with Claude Code, Codex, Grok or Antigravity.",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.isle",
+  "url": "https://github.com/YOUR-GITHUB-OWNER/keenu",
+  "version-name": "2.0.0-alpha.1"
+}

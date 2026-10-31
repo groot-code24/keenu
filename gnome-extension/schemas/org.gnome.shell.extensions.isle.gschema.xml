@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.isle" path="/org/gnome/shell/extensions/isle/">
+    <key name="top-bar-style" type="s">
+      <choices>
+        <choice value="glass"/>
+        <choice value="black"/>
+      </choices>
+      <default>'glass'</default>
+      <summary>Top bar style</summary>
+      <description>“glass”: see-through, with no colour of its own, with the island as a black notch hanging from the top of the screen. “black”: the island blends into a black bar. (A “theme” setting from before 0.7.3 reads as glass.)</description>
+    </key>
+    <key name="island-theme" type="s">
+      <choices>
+        <choice value="black"/>
+        <choice value="glass"/>
+      </choices>
+      <default>'black'</default>
+      <summary>The island's look</summary>
+      <description>black: Keenu's own black island. glass: dark glass over what is behind it, blurred, as Blur my Shell draws GNOME's menus.</description>
+    </key>
+    <key name="top-bar-opacity" type="i">
+      <range min="0" max="100"/>
+      <default>0</default>
+      <summary>Top bar opacity</summary>
+      <description>How black the top bar beside the island is, in %: 0 is glass, 100 is black and the island blends into it. Unset, top-bar-style decides.</description>
+    </key>
+    <key name="compact-top-bar" type="b">
+      <default>true</default>
+      <summary>Compact top bar</summary>
+      <description>Make the top bar slimmer, so it frames the island like a thin bezel.</description>
+    </key>
+    <key name="island-in-top-bar" type="b">
+      <default>true</default>
+      <summary>Closed island inside the top bar</summary>
+      <description>Like a notch: the top bar is as tall as the closed island, so it never covers windows. Alerts and the open island still hang below it for a moment.</description>
+    </key>
+    <key name="lyrics-online" type="b">
+      <default>true</default>
+      <summary>Look up lyrics online</summary>
+      <description>From LRCLIB, by the song's title, artist and length.</description>
+    </key>
+    <key name="check-updates" type="b">
+      <default>true</default>
+      <summary>Say when a newer Keenu is out</summary>
+      <description>Keenu asks GitHub for its latest release at most once a day.</description>
+    </key>
+    <key name="update-shown" type="s">
+      <default>''</default>
+      <summary>The newest version already announced, so each is said once</summary>
+    </key>
+    <key name="prefs-page" type="s">
+      <default>''</default>
+      <summary>The Settings page to open on next, once</summary>
+      <description>The island's Update button sets it to show About, where the update is.</description>
+    </key>
+    <key name="open-on" type="s">
+      <choices>
+        <choice value="hover"/>
+        <choice value="click"/>
+      </choices>
+      <default>'hover'</default>
+      <summary>How the island opens</summary>
+      <description>"hover": when the pointer rests on it. "click": only when clicked.</description>
+    </key>
+    <key name="hover-delay" type="i">
+      <range min="60" max="1000"/>
+      <default>120</default>
+      <summary>How long the pointer rests before the island opens, in milliseconds</summary>
+    </key>
+    <key name="island-monitor" type="s">
+      <choices>
+        <choice value="primary"/>
+        <choice value="active"/>
+      </choices>
+      <default>'primary'</default>
+      <summary>Display the island is on</summary>
+      <description>"primary": the main display, in its top bar. "active": the display of the window in use; on a display without a top bar it hangs from the top edge.</description>
+    </key>
+    <key name="notch-depth" type="i">
+      <range min="24" max="40"/>
+      <default>30</default>
+      <summary>Island height</summary>
+      <description>How far the closed island hangs below the top bar, in pixels, when it is not inside the top bar.</description>
+    </key>
+    <key name="replace-osd" type="b">
+      <default>true</default>
+      <summary>Show volume and brightness in the island</summary>
+    </key>
+    <key name="system-alerts" type="b">
+      <default>true</default>
+      <summary>Show battery, network, Bluetooth and Caps Lock alerts</summary>
+      <description>Before 0.7, one switch for all four; now each has its own (alert-power, alert-network, alert-bluetooth, alert-caps-lock), and this one is only read once to carry an "off" over.</description>
+    </key>
+    <key name="alert-power" type="b">
+      <default>true</default>
+      <summary>Show charging and battery alerts</summary>
+    </key>
+    <key name="alert-network" type="b">
+      <default>true</default>
+      <summary>Show network alerts</summary>
+    </key>
+    <key name="alert-bluetooth" type="b">
+      <default>true</default>
+      <summary>Show Bluetooth alerts</summary>
+    </key>
+    <key name="alert-caps-lock" type="b">
+      <default>true</default>
+      <summary>Show Caps Lock alerts</summary>
+    </key>
+    <key name="event-alerts" type="b">
+      <default>true</default>
+      <summary>Alert before calendar events</summary>
+      <description>An alert before each event with a time, with a Join button when it has a meeting link.</description>
+    </key>
+    <key name="event-alert-minutes" type="i">
+      <range min="1" max="60"/>
+      <default>5</default>
+      <summary>Minutes before an event its alert shows</summary>
+    </key>
+    <key name="event-calendar" type="s">
+      <default>''</default>
+      <summary>Where new events go</summary>
+      <description>The desktop calendar (an Evolution Data Server source uid, such as an Online Accounts calendar) the Calendar page and the assistant add events to; "isle" for Keenu's own calendar on this computer; empty for the first account's calendar, or Keenu's own without one.</description>
+    </key>
+    <key name="world-clocks" type="b">
+      <default>true</default>
+      <summary>World clocks on the Calendar page</summary>
+      <description>A globe on the Calendar page shows the time in the cities of GNOME’s World Clocks.</description>
+    </key>
+    <key name="hidden-pages" type="as">
+      <default>[]</default>
+      <summary>Pages left out of the island</summary>
+      <description>Names of the open island’s pages that have no tab: music, notifications, focus, reminders, shelf, calendar. The Apps and Usage pages have their own switches (app-usage, usage-enabled).</description>
+    </key>
+    <key name="app-usage" type="b">
+      <default>false</default>
+      <summary>The Apps page, timing the application in front</summary>
+      <description>Shows the Apps page and times the application in front, whether or not there is keyboard or pointer input, keeping 30 days on this computer. Time pauses after five idle minutes, unless a video or another program holds the session awake. Off until you turn it on; off, nothing is timed and the page has no tab.</description>
+    </key>
+    <key name="app-usage-clear" type="b">
+      <default>false</default>
+      <summary>Clear app usage once</summary>
+      <description>Settings asks the island to forget the app usage; the island resets this to false when it has.</description>
+    </key>
+    <key name="agent-alerts-claude" type="b">
+      <default>true</default>
+      <summary>Answer Claude Code from the island</summary>
+      <description>When on, Keenu adds a hook to Claude Code's settings so it hears when Claude needs you or is done; off removes it.</description>
+    </key>
+    <key name="agent-alerts-codex" type="b">
+      <default>true</default>
+      <summary>Answer Codex from the island</summary>
+      <description>When on, Keenu adds hooks to Codex's hooks.json so it hears when Codex needs you or is done; off removes them.</description>
+    </key>
+    <key name="agents-announced" type="as">
+      <default>[]</default>
+      <summary>AI agents already told they are connected</summary>
+      <description>Keenu says once, the first time, that it connected to each agent.</description>
+    </key>
+    <key name="gnome-banners" type="b">
+      <default>false</default>
+      <summary>Leave notifications to GNOME's own banners</summary>
+      <description>The island then shows no notification alerts; its Notifications page still lists them.</description>
+    </key>
+    <key name="super-v" type="s">
+      <choices>
+        <choice value="isle"/>
+        <choice value="gnome"/>
+      </choices>
+      <default>'isle'</default>
+      <summary>What Super+V (GNOME's calendar shortcut) opens</summary>
+      <description>"isle": the island's clipboard history. "gnome": GNOME's own calendar and notification list.</description>
+    </key>
+    <key name="track-peek" type="b">
+      <default>false</default>
+      <summary>Briefly show the new song when the track changes</summary>
+    </key>
+    <key name="privacy-indicators" type="b">
+      <default>true</default>
+      <summary>Show when the camera, microphone or screen sharing is in use</summary>
+    </key>
+    <key name="call-activity" type="b">
+      <default>true</default>
+      <summary>Show calls in the island</summary>
+      <description>While an app uses the microphone for a call (WhatsApp, Telegram, Meet in a browser…), the island shows it, with mute and a way back to the call.</description>
+    </key>
+    <key name="call-preview" type="b">
+      <default>true</default>
+      <summary>Live preview of the call</summary>
+      <description>The open island shows the call's window as it is on screen, so you see yourself and whoever you call. The shell draws it from the window; nothing is recorded, and it is hidden while you share your screen.</description>
+    </key>
+    <key name="focus-dnd" type="b">
+      <default>true</default>
+      <summary>Turn on Do Not Disturb during focus sessions</summary>
+    </key>
+    <key name="focus-dnd-owned" type="b">
+      <default>false</default>
+      <summary>Internal: Do Not Disturb was turned on by a focus session</summary>
+      <description>Kept across restarts and the lock screen so Keenu can turn it off again afterwards.</description>
+    </key>
+    <key name="focus-dnd-declined" type="x">
+      <default>-1</default>
+      <summary>Internal: the focus session Do Not Disturb was turned off in</summary>
+      <description>When that session started (milliseconds), so Do Not Disturb stays off until it ends, past the lock screen too; -1 for none.</description>
+    </key>
+    <key name="clipboard-history" type="b">
+      <default>true</default>
+      <summary>Keep a history of what you copy</summary>
+      <description>Text, links, images and files, stored only on this computer.</description>
+    </key>
+    <key name="clipboard-ignored-apps" type="as">
+      <default>['org.keepassxc.KeePassXC.desktop', 'com.bitwarden.desktop.desktop', 'bitwarden.desktop', '1password.desktop', 'org.gnome.World.Secrets.desktop', 'org.gnome.seahorse.Application.desktop', 'proton-pass.desktop']</default>
+      <summary>Apps whose copies are never kept</summary>
+      <description>Desktop app ids, e.g. password managers.</description>
+    </key>
+    <key name="voice-assistant" type="b">
+      <default>true</default>
+      <summary>Voice assistant</summary>
+      <description>Listen for requests on the shortcut and the mic button, and answer them with the AI chosen: Claude Code, Codex, Grok or Antigravity (agy).</description>
+    </key>
+    <key name="voice-shortcut" type="as">
+      <default><![CDATA[['<Super>i']]]></default>
+      <summary>Voice assistant shortcut</summary>
+      <description>Opens the voice assistant and listens. Pressed while listening, it finishes; after an answer, it listens again.</description>
+    </key>
+    <key name="voice-provider" type="s">
+      <default>'auto'</default>
+      <summary>AI the voice assistant asks</summary>
+      <description>“agy” (Antigravity), “claude” (Claude Code), “codex” (Codex) or “grok” (Grok), each with its own sign-in; “auto” for the first installed and signed in.</description>
+    </key>
+    <key name="voice-claude-model" type="s">
+      <default>'sonnet'</default>
+      <summary>Model Claude Code answers with</summary>
+      <description>haiku, sonnet or opus; empty for Claude Code's default.</description>
+    </key>
+    <key name="voice-codex-model" type="s">
+      <default>''</default>
+      <summary>Model Codex answers with</summary>
+      <description>A model id from Codex; empty for the one Codex itself uses.</description>
+    </key>
+    <key name="voice-grok-model" type="s">
+      <default>''</default>
+      <summary>Model Grok answers with</summary>
+      <description>A model id from Grok; empty for the one Grok itself uses.</description>
+    </key>
+    <key name="voice-agy-model" type="s">
+      <default>'gemini-3.8-flash-low'</default>
+      <summary>Model the voice assistant asks</summary>
+      <description>A model id from “agy models”; empty for agy's default.</description>
+    </key>
+    <key name="voice-speech-model" type="s">
+      <default>'small'</default>
+      <summary>Speech recognition model</summary>
+      <description>A whisper.cpp model: tiny, base, small or medium. Bigger is more accurate and slower; keenu-setup-voice downloads it.</description>
+    </key>
+    <key name="voice-language" type="s">
+      <default>''</default>
+      <summary>Spoken language</summary>
+      <description>A language code such as “id” or “en”, several (“id,en”) to tell them apart, or empty to detect any.</description>
+    </key>
+    <key name="bot-shape" type="s">
+      <choices>
+        <choice value="circle"/>
+        <choice value="pebble"/>
+        <choice value="squircle"/>
+        <choice value="capsule"/>
+        <choice value="cloud"/>
+        <choice value="hexagon"/>
+        <choice value="drop"/>
+        <choice value="ghost"/>
+      </choices>
+      <default>'circle'</default>
+      <summary>The assistant's shape</summary>
+    </key>
+    <key name="bot-color" type="s">
+      <default>'cloud'</default>
+      <summary>The assistant's colour</summary>
+      <description>One of Keenu's colours (cloud, ink, peach, coral, amber, mint, teal, sky, lavender, rose, graphite) or a colour as #rrggbb.</description>
+    </key>
+    <key name="bot-glow" type="s">
+      <default>'match'</default>
+      <summary>The colours the island glows with while the assistant is open</summary>
+      <description>"match" follows the assistant's colour, "classic" is violet, blue and cyan, or a colour as #rrggbb to glow around.</description>
+    </key>
+    <key name="voice-keep-chat" type="s">
+      <choices>
+        <choice value="idle-30m"/>
+        <choice value="idle-2h"/>
+        <choice value="day"/>
+      </choices>
+      <default>'day'</default>
+      <summary>How long the assistant keeps a conversation</summary>
+      <description>Until midnight (never more than a day), or after 30 minutes or 2 hours without a word: then it starts a new one and deletes the old, here and in the AI's own history.</description>
+    </key>
+    <key name="voice-use-selection" type="b">
+      <default>false</default>
+      <summary>Send the selected text to the voice assistant</summary>
+      <description>So it can work on it ("make this shorter"). Never from terminals or apps kept out of the clipboard history.</description>
+    </key>
+    <key name="voice-read-notifications" type="b">
+      <default>false</default>
+      <summary>Let the voice assistant read notifications</summary>
+      <description>Send the last few notifications with each request, so the AI (Claude Code, Codex, Grok or Antigravity) can read them out or summarise them.</description>
+    </key>
+    <key name="usage-enabled" type="b">
+      <default>true</default>
+      <summary>Show AI plan usage</summary>
+      <description>A Usage page and warnings for Claude (signed in with Claude Code), ChatGPT (as Codex last saw it) and Grok, when found.</description>
+    </key>
+    <key name="usage-claude" type="b">
+      <default>true</default>
+      <summary>Show Claude's usage</summary>
+    </key>
+    <key name="usage-codex" type="b">
+      <default>true</default>
+      <summary>Show ChatGPT's usage</summary>
+    </key>
+    <key name="usage-grok" type="b">
+      <default>true</default>
+      <summary>Show Grok's usage</summary>
+    </key>
+    <key name="usage-warn" type="i">
+      <range min="50" max="99"/>
+      <default>80</default>
+      <summary>Warn at this share of a limit (%)</summary>
+    </key>
+    <key name="usage-critical" type="i">
+      <range min="50" max="100"/>
+      <default>95</default>
+      <summary>Warn again at this share of a limit (%)</summary>
+    </key>
+    <key name="chimes" type="b">
+      <default>true</default>
+      <summary>Play a sound when a focus session or break ends</summary>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,15 @@
+post_install() {
+  echo 'Log out and back in, then turn Keenu on once as each user (in the Extensions app, or):'
+  echo '  gnome-extensions enable isle@zickrian.github.io'
+  echo 'For the voice assistant, each user also runs keenu-setup-voice once.'
+}
+
+post_upgrade() {
+  echo 'Log out and back in so GNOME Shell loads the new Keenu.'
+}
+
+pre_remove() {
+  echo "Keenu's alert hooks stay in Claude Code's and Codex's settings, calling the removed keenud."
+  echo "Each user who ran Keenu runs 'keenud --unhook-all' before removing keenu-bin"
+  echo "(afterwards: reinstall it, run that, then remove it again)."
+}

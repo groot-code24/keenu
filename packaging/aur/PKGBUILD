@@ -1,0 +1,48 @@
+# Maintainer: YOUR-NAME <YOUR-EMAIL>
+# Keenu from its release tarball, with the programs GitHub Actions built. After a release,
+# `./update.sh <version>` sets the version and checksum here and in .SRCINFO.
+
+pkgname=keenu-bin
+pkgver=2.0.0
+pkgrel=1
+pkgdesc='A notch-style island for the GNOME Shell top bar: music with synced lyrics, calls, a focus timer, a calendar, a file shelf, app usage and a voice assistant'
+arch=('x86_64')
+url='https://github.com/YOUR-GITHUB-OWNER/keenu'
+license=('GPL-3.0-or-later' 'OFL-1.1')
+depends=('gnome-shell>=1:46' 'dconf' 'gtk4' 'glib2' 'pango' 'gdk-pixbuf2' 'gcc-libs' 'glibc' 'bash')
+optdepends=('vulkan-icd-loader: speech recognition on the graphics card, else on the processor')
+provides=('keenu')
+conflicts=('keenu')
+options=('!strip' '!debug')
+install=keenu-bin.install
+source_x86_64=("https://github.com/YOUR-GITHUB-OWNER/keenu/releases/download/v$pkgver/keenu-$pkgver-$CARCH-linux.tar.gz")
+sha256sums_x86_64=('SKIP-UNTIL-A-RELEASE-EXISTS: run update.sh')
+
+package() {
+  cd "keenu-$pkgver-$CARCH-linux"
+  local uuid=isle@zickrian.github.io
+
+  install -Dm755 -t "$pkgdir/usr/bin" bin/keenud bin/keenu-shelf bin/keenu-whisper scripts/keenu-charge-limit
+  install -Dm755 scripts/setup-voice.sh "$pkgdir/usr/bin/keenu-setup-voice"
+
+  local ext="$pkgdir/usr/share/gnome-shell/extensions/$uuid"
+  install -d "$ext"
+  cp -r --no-preserve=ownership gnome-extension/. "$ext/"
+  # The settings schema goes where the system compiles it; the extension then finds it there.
+  install -Dm644 -t "$pkgdir/usr/share/glib-2.0/schemas" "$ext"/schemas/*.gschema.xml
+  rm -r "$ext/schemas"
+  chmod -R u=rwX,go=rX "$ext"
+
+  local service
+  for service in io.github.zickrian.isle.Daemon.service io.github.zickrian.isle.ShelfWindow.service keenud.service; do
+    sed -e 's|@BINDIR@|/usr/bin|' -e 's|file://%h/.local/share/doc/keenu|file:///usr/share/doc/keenu|' \
+      "data/$service" > "$srcdir/$service"
+  done
+  install -Dm644 -t "$pkgdir/usr/share/dbus-1/services" \
+    "$srcdir/io.github.zickrian.isle.Daemon.service" "$srcdir/io.github.zickrian.isle.ShelfWindow.service"
+  install -Dm644 -t "$pkgdir/usr/lib/systemd/user" "$srcdir/keenud.service"
+
+  install -Dm644 -t "$pkgdir/usr/share/fonts/keenu" data/fonts/InterVariable.ttf
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE data/fonts/Inter-LICENSE.txt
+  install -Dm644 -t "$pkgdir/usr/share/doc/keenu" README.md CHANGELOG.md
+}

@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest something the island could do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like the island to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is it useful?
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How should it look or behave?
+      description: "[docs/product-spec.md](https://github.com/YOUR-GITHUB-OWNER/keenu/blob/main/docs/product-spec.md) describes the current behaviour; say what would change."

@@ -1,0 +1,86 @@
+# What works where
+
+This page says what has actually been tested, on what. A feature is not listed as working because code for it exists.
+[The acceptance matrix](feature-acceptance-matrix.md) has the individual checks.
+
+| Word | Meaning |
+|---|---|
+| **Tested** | Run for real on that system, by a test or a person |
+| **Mock-tested** | The logic is tested against a stand-in; never against the real service |
+| **Compiles** | Type-checked or built only; never run |
+| **Not yet** | Not implemented |
+| **Not supported** | Cannot be done, for the reason given |
+
+## Systems
+
+| System | Status | What has been run |
+|---|---|---|
+| Windows 11, x64 | **Alpha: tested** | Windows 11 build 26300 at 150%, one display, built with mingw-w64 through Docker |
+| Windows 10 2004+, x64 | Declared, **not tested** | Same APIs; needs a run |
+| Windows 11, ARM64 | **Compiles** in CI only | Nothing |
+| Linux, GNOME 46–51, x64 | **Alpha**: logic tested, packages built | Tests in Debian containers. Test packages installed in containers with a headless GNOME Shell 48.7 and 49.10: see the matrix. Not yet used on a real desktop since the rename |
+| Linux, GNOME 46–51, ARM64 | CI only | Nothing |
+| Linux, KDE Plasma and others | **No island yet** | `keenud` starts anywhere with a session bus, but the only UI is a GNOME Shell extension |
+| macOS 11+, Apple Silicon and Intel | **Compiles: never run on a Mac** | Type-checked and linted for both architectures, from Windows. Not linked |
+
+MSVC is what official Windows releases will use, and it has not been run here: the machine used for testing has no
+Visual Studio, so this was built with mingw-w64. CI builds with MSVC.
+
+## Features
+
+| Feature | Windows | Linux with GNOME | macOS |
+|---|---|---|---|
+| Sessions, metadata, play/pause | Tested with a real session | Existing code, tested with mocks in the daemon's tests | Compiles: Music, Spotify |
+| Next, previous, seek | Compiles against real APIs | As above | Compiles |
+| Cover art | Compiles against real APIs; the test session had none | As above | Not yet |
+| Several sessions | Mock-tested | As above | Mock-tested |
+| Local LRC lyrics | Tested | Not on this edition: LRCLIB | Mock-tested |
+| Online lyrics (LRCLIB) | Mock-tested; opt-in | Existing, opt-in | Mock-tested |
+| Toast or notification shown | Tested accepted by Windows | The extension's own | Compiles |
+| Notification action buttons | Compiles; nothing uses them yet | The extension's own | Not supported: needs a signed bundle |
+| CalDAV | **Tested against a real server** (Radicale), 100 full rounds | Through GNOME's accounts instead | Compiles |
+| Google Calendar | Mock-tested. **Blocked** on a client ID | Through GNOME's accounts instead | Mock-tested |
+| Microsoft 365 | Mock-tested. **Blocked** on a client ID | Through GNOME's accounts instead | Mock-tested |
+| Clipboard: text, privacy flags, copy back, clear | Tested on the real clipboard, on a build shortly before the final one | Existing | Not yet |
+| Clipboard: rich text, images, files | Unit-tested conversions | Existing, without rich text | Not yet |
+| Shelf: references, pins, missing files | Tested | Existing, smaller | Mock-tested |
+| Shelf: drag and drop itself, thumbnails | Compiles; Explorer drag needs a person | Existing | Not yet |
+| Microphone list, recording | Compiles; **needs a person with a microphone** | Existing | Not yet |
+| Speaking, listening with the system | Compiles; needs a speech pack and a person | whisper.cpp | `say` compiles |
+| OpenAI-compatible speech | Mock-tested | Not on this edition | Not reachable: no recording |
+| Claude Code and Codex: hook install, schema, pipe, buttons | **Tested end to end** with the documented payload | Existing, with its own tests | Not yet: the hook prints nothing |
+| Claude Code and Codex: the real CLIs | **Not run**: neither CLI was on this machine's PATH | Not run | |
+| App usage | Tested as far as the record; real foreground reading tested | Existing | Compiles |
+| Updates: manifest, checksum, signature logic | Tested | Notice only | Compiles |
+| Updates: installing one | **Blocked** on a code-signing certificate | Not supported: use the package manager or `install.sh` | Not yet |
+| Installer: install, upgrade, remove | **Tested**: MSI, setup, ZIP, one-command | Tarball, .deb, .rpm: see the matrix | Compiles |
+| Tray or menu bar | Tested as far as surviving Explorer's restart message | Not applicable | Compiles |
+| One instance | Tested | Existing | Not yet |
+| Sleep, resume, lock | Tested by simulated messages | Existing | Not yet |
+| Displays: several, mixed scale, hotplug | Logic unit-tested, messages simulated. **Needs a person with two displays** | Existing | Compiles |
+| Fullscreen | Compiles | Existing | Not yet |
+| Screen reader | Not yet: regions have names, but they are not exposed to UI Automation | Through GNOME | Not yet |
+| Keyboard | Tested by real key messages | Existing | Not yet |
+
+## Limits that are the system's
+
+- **macOS** has no public API for every app's now-playing information. Keenu can only ask apps with a scripting
+  interface: Music and Spotify.
+- **macOS** notification actions and identity need a signed, notarized bundle.
+- **Windows** toasts from a program without a package show its registered name; a Start Menu entry helps some systems.
+- **Windows** gives no way to read a clipboard entry an app has delay-rendered without asking that app to render it.
+- **Linux** clipboard monitoring needs the session's own privileges: the extension does this inside GNOME Shell, which
+  no separate program could do on Wayland. So it is GNOME-only.
+- **AppImage** does not fit a GNOME Shell extension, which must be installed where the shell looks.
+
+## Known gaps
+
+- Windows ships no automatic recovery if Direct2D cannot start, beyond saying so.
+- Rich text and images on the clipboard have had unit tests but no run with a real app.
+- The Linux packages tested had speech on the processor only: the build with the graphics card needs more memory than
+  the test machine's Docker had, so it has not finished. A release's packages have not been built yet.
+- `keenu-macos` does not reach the agents' pipe, so agents ask in their terminals there.
+- `Reminder` and task pages exist only on Linux; elsewhere they are reachable through the command line, and reminders
+  still notify.
+- Several features of the Linux edition are not on the others: the focus timer, calls, the AI assistant and its plan
+  usage pages.

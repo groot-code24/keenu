@@ -1,0 +1,59 @@
+name: macOS
+
+# Builds the macOS host and its app bundle and tests what can be tested without a person at the Mac. No macOS
+# feature has yet been run by hand: see docs/platform-support.md.
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, os: macos-14 }
+          - { arch: x64, os: macos-13 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint
+        run: cargo clippy --locked -p keenu-macos --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-app -p keenu-ui
+      - name: Build
+        env:
+          KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL }}
+          KEENU_UPDATE_PUBLIC_KEY: ${{ vars.KEENU_UPDATE_PUBLIC_KEY }}
+          KEENU_GOOGLE_CLIENT_ID: ${{ vars.KEENU_GOOGLE_CLIENT_ID }}
+          KEENU_GOOGLE_CLIENT_SECRET: ${{ vars.KEENU_GOOGLE_CLIENT_SECRET }}
+          KEENU_MICROSOFT_CLIENT_ID: ${{ vars.KEENU_MICROSOFT_CLIENT_ID }}
+        run: cargo build --release --locked -p keenu-macos
+      - name: Make the app and disk image
+        env:
+          KEENU_BUNDLE_ID: ${{ vars.KEENU_BUNDLE_ID }}
+        run: packaging/macos/build-app.sh
+      - name: The app bundle is well formed and starts
+        run: |
+          test -x dist/Keenu.app/Contents/MacOS/Keenu
+          plutil -lint dist/Keenu.app/Contents/Info.plist
+          codesign --verify --verbose=2 dist/Keenu.app
+          dist/Keenu.app/Contents/MacOS/Keenu --version
+          dist/Keenu.app/Contents/MacOS/Keenu --capabilities
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keenu-macos-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error

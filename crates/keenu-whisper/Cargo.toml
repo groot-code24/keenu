@@ -1,0 +1,25 @@
+[package]
+name = "keenu-whisper"
+description = "Speech recognition for Keenu's voice assistant: whisper.cpp on the GPU through Vulkan, or on the processor"
+version.workspace = true
+edition.workspace = true
+# whisper-rs-sys needs 1.88.
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = ["vulkan"]
+# The GPU through Vulkan. Building it needs the Vulkan headers and glslc; the
+# program still runs where Vulkan is missing, on the processor.
+vulkan = ["whisper-rs/vulkan", "dep:libc"]
+
+[dependencies]
+keenu-core.workspace = true
+
+libc = { workspace = true, optional = true }
+serde_json.workspace = true
+# Pinned: it brings whisper.cpp (1.8.3) and ggml, built from source with cmake.
+# raw-api: ggml's device list, to pick the GPU.
+whisper-rs = { version = "=0.16.0", features = ["raw-api"] }

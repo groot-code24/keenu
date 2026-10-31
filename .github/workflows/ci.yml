@@ -1,0 +1,95 @@
+name: CI
+
+# What does not depend on a desktop: formatting, lint and logic tests, on all three systems, plus the
+# scripts and the extension's JavaScript. Each system's own workflow builds and exercises the real thing.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request replaces a run still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  shared-logic:
+    name: Shared logic (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint
+        run: cargo clippy --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          shellcheck -x install.sh uninstall.sh dev.sh build.sh test.sh scripts/*.sh scripts/keenu-charge-limit \
+            scripts/ci/*.sh scripts/install/install.sh scripts/windows/package.sh packaging/macos/build-app.sh packaging/aur/update.sh
+
+  powershell:
+    name: PowerShell scripts
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every script parses
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem -Recurse -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $failed = $true; Write-Host $file.FullName; $errors | ForEach-Object { Write-Host "  $_" } }
+          }
+          if ($failed) { exit 1 }
+
+  javascript:
+    name: Extension and download page
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check JavaScript syntax
+        run: |
+          for file in gnome-extension/*.js gnome-extension/src/*.js gnome-extension/src/pages/*.js website/*.js; do
+            node --experimental-default-type=module --check "$file"
+          done
+      - run: npm ci
+      - run: npm run lint
+      - name: Tests
+        run: node --test tests/extension/*.test.js tests/website/*.test.js
