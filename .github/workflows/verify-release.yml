@@ -7,7 +7,7 @@ name: Verify release
 on:
   push:
     branches: [main]
-    paths: ['website/keenu-release.json']
+    paths: ['website/keenu-release.json', '.github/workflows/verify-release.yml']
   workflow_call:
     inputs:
       version:
@@ -95,7 +95,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: arm64, os: macos-14 }
+          - { arch: arm64, os: macos-15 }
           - { arch: x64, os: macos-15-intel }
     steps:
       - name: Install and start, as the page says
