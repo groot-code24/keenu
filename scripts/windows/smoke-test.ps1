@@ -257,19 +257,47 @@ END:VCALENDAR
         Save-Settings { param($s) $s | Add-Member -Force clipboard ([pscustomobject]@{ enabled = $true }) }
         $island = Start-Island
         Start-Sleep -Milliseconds 400
-        Add-Type -AssemblyName System.Windows.Forms
-        # Anyone can hold the clipboard for a moment, and the island reads it after each copy: tries for up to 5 s.
-        [System.Windows.Forms.Clipboard]::SetDataObject('copied with history on', $true, 20, 250)
+        # As a native program copies, with the data there at once. .NET's own copy promises the data for later and then
+        # blocks without answering, which leaves it and the island waiting for each other.
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+public static class KeenuTestClipboard {
+    [DllImport("user32", SetLastError = true)] static extern bool OpenClipboard(IntPtr owner);
+    [DllImport("user32")] static extern bool CloseClipboard();
+    [DllImport("user32")] static extern bool EmptyClipboard();
+    [DllImport("user32", SetLastError = true)] static extern IntPtr SetClipboardData(uint format, IntPtr data);
+    [DllImport("user32", CharSet = CharSet.Unicode)] static extern uint RegisterClipboardFormatW(string name);
+    [DllImport("kernel32")] static extern IntPtr GlobalAlloc(uint flags, UIntPtr size);
+    [DllImport("kernel32")] static extern IntPtr GlobalLock(IntPtr memory);
+    [DllImport("kernel32")] static extern bool GlobalUnlock(IntPtr memory);
+    static void Put(uint format, byte[] bytes) {
+        IntPtr memory = GlobalAlloc(2, (UIntPtr)bytes.Length);
+        Marshal.Copy(bytes, 0, GlobalLock(memory), bytes.Length);
+        GlobalUnlock(memory);
+        if (SetClipboardData(format, memory) == IntPtr.Zero) throw new InvalidOperationException("SetClipboardData failed");
+    }
+    public static void Copy(string text, string marker, byte[] value) {
+        int tries = 0;
+        while (!OpenClipboard(IntPtr.Zero)) {
+            if (++tries > 200) throw new InvalidOperationException("Something is holding the clipboard");
+            Thread.Sleep(25);
+        }
+        try {
+            EmptyClipboard();
+            Put(13, Encoding.Unicode.GetBytes(text + "\0"));
+            if (marker != null) Put(RegisterClipboardFormatW(marker), value);
+        } finally { CloseClipboard(); }
+    }
+}
+'@
+        [KeenuTestClipboard]::Copy('copied with history on', $null, $null)
         Start-Sleep -Milliseconds 600
-        $private = New-Object System.Windows.Forms.DataObject
-        $private.SetText('hunter2-private')
-        $private.SetData('ExcludeClipboardContentFromMonitorProcessing', $true, (New-Object IO.MemoryStream(,[byte[]](1, 0, 0, 0))))
-        [System.Windows.Forms.Clipboard]::SetDataObject($private, $true, 20, 250)
+        [KeenuTestClipboard]::Copy('hunter2-private', 'ExcludeClipboardContentFromMonitorProcessing', [byte[]](1, 0, 0, 0))
         Start-Sleep -Milliseconds 600
-        $marked = New-Object System.Windows.Forms.DataObject
-        $marked.SetText('hunter3-not-in-history')
-        $marked.SetData('CanIncludeInClipboardHistory', $false, (New-Object IO.MemoryStream(,[byte[]](0, 0, 0, 0))))
-        [System.Windows.Forms.Clipboard]::SetDataObject($marked, $true, 20, 250)
+        [KeenuTestClipboard]::Copy('hunter3-not-in-history', 'CanIncludeInClipboardHistory', [byte[]](0, 0, 0, 0))
         Start-Sleep -Milliseconds 600
         Check 'the island survives the clipboard' (Stop-Island $island)
         $history = Invoke-Keenu @('--clipboard-history-list')

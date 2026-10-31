@@ -77,6 +77,8 @@ Visual Studio, so this was built with mingw-w64. CI builds with MSVC.
 
 - Windows ships no automatic recovery if Direct2D cannot start, beyond saying so.
 - Rich text and images on the clipboard have had unit tests but no run with a real app.
+- With clipboard history on, the Windows island reads each copy on its window's thread. An app that copies with delayed
+  rendering and then stops responding can stall the island until Windows gives up on that app.
 - The Linux packages tested had speech on the processor only: the build with the graphics card needs more memory than
   the test machine's Docker had, so it has not finished. A release's packages have not been built yet.
 - `keenu-macos` does not reach the agents' pipe, so agents ask in their terminals there.
