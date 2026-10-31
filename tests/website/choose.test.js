@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { chooseDownloads, detectPlatform, downloadsBySystem, formatSize, installCommands, latestRelease, safeUrl } from '../../website/choose.js';
+import { chooseDownloads, detectPlatform, downloadsBySystem, formatSize, installCommands, latestRelease, safeUrl, systemName } from '../../website/choose.js';
 
 const artifact = (platform, kind) => ({ platform, kind, file_name: `${platform}.${kind}`, url: `https://x.invalid/${kind}` });
 
@@ -49,6 +49,11 @@ test('offers one file for each system the release has', () => {
         ['Linux x64', 'tar.gz'],
     ]);
     assert.deepEqual(downloadsBySystem(null), []);
+});
+
+test('names systems as people do', () => {
+    assert.equal(systemName('macos-arm64'), 'macOS, Apple silicon');
+    assert.equal(systemName('plan9-x64'), 'plan9-x64');
 });
 
 test('install commands use the address of a secure site, and no other', () => {

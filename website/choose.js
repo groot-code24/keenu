@@ -65,6 +65,11 @@ export function downloadsBySystem(release) {
         .filter(({ artifact }) => artifact);
 }
 
+/** What to call a platform on the page. */
+export function systemName(platform) {
+    return PLATFORM_NAMES.find(([known]) => known === platform)?.[1] ?? platform;
+}
+
 /** The commands to install from this site, or `null` where its address could not work for other people. */
 export function installCommands({ protocol, host } = {}) {
     if (protocol !== 'https:' || !host)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The download page: everything on it comes from the release manifest, so it can only offer what exists.
 
-import { chooseDownloads, detectPlatform, downloadsBySystem, formatSize, installCommands, latestRelease, safeUrl } from './choose.js';
+import { chooseDownloads, detectPlatform, downloadsBySystem, formatSize, installCommands, latestRelease, safeUrl, systemName } from './choose.js';
 
 const MANIFEST = './keenu-release.json';
 
@@ -76,7 +76,7 @@ async function main() {
     element('status').textContent = `Keenu ${release.version}${release.channel === 'stable' ? '' : ' (test version)'}`;
     if (recommended) {
         const link = element('recommended');
-        link.textContent = `Download for ${recommended.platform} (${recommended.kind})`;
+        link.textContent = `Download for ${systemName(recommended.platform)} (.${recommended.kind})`;
         if (safeUrl(recommended.url))
             link.href = recommended.url;
         link.hidden = false;
@@ -85,7 +85,7 @@ async function main() {
         element('checksum').textContent = `SHA-256: ${recommended.sha256}`;
     } else {
         element('requirements').textContent = platform
-            ? `This release has no download for ${platform} yet.`
+            ? `This release has no download for ${systemName(platform)} yet.`
             : 'Choose your system from the list below.';
     }
 
