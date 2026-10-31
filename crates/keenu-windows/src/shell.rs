@@ -13,8 +13,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
-    RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE,
+    REG_SAM_FLAGS, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW,
+    RegQueryValueExW, RegSetValueExW,
 };
 use windows::Win32::UI::Shell::{
     ILCreateFromPathW, ILFree, IShellItemImageFactory, QUNS_BUSY, QUNS_PRESENTATION_MODE,
@@ -181,8 +182,9 @@ impl FileShelfProvider for Shell {
     }
 }
 
-fn open_run_key(access: windows::Win32::System::Registry::REG_SAM_FLAGS) -> Result<HKEY> {
-    let path = HSTRING::from(RUN_KEY);
+/// The key at `path`, or `None` if it is not there: a new profile may have no Run key until something adds one.
+fn open_key(path: &str, access: REG_SAM_FLAGS) -> Result<Option<HKEY>> {
+    let path = HSTRING::from(path);
     let mut key = HKEY::default();
     // SAFETY: closed by the caller.
     let status = unsafe {
@@ -194,6 +196,35 @@ fn open_run_key(access: windows::Win32::System::Registry::REG_SAM_FLAGS) -> Resu
             &mut key,
         )
     };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
+    if status != ERROR_SUCCESS {
+        return Err(format!(
+            "Could not open the startup settings ({}).",
+            status.0
+        ));
+    }
+    Ok(Some(key))
+}
+
+fn create_key(path: &str) -> Result<HKEY> {
+    let path = HSTRING::from(path);
+    let mut key = HKEY::default();
+    // SAFETY: creates or opens a key under this user's hive, closed by the caller.
+    let status = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            None,
+            &mut key,
+            None,
+        )
+    };
     if status != ERROR_SUCCESS {
         return Err(format!(
             "Could not open the startup settings ({}).",
@@ -203,50 +234,67 @@ fn open_run_key(access: windows::Win32::System::Registry::REG_SAM_FLAGS) -> Resu
     Ok(key)
 }
 
+/// Sets or removes this program's value in the key at `path`. Removing from a key that is not there is already done.
+fn set_startup_value(path: &str, enabled: bool) -> Result<()> {
+    let key = if enabled {
+        create_key(path)?
+    } else {
+        match open_key(path, KEY_SET_VALUE)? {
+            Some(key) => key,
+            None => return Ok(()),
+        }
+    };
+    let name = HSTRING::from(RUN_VALUE);
+    // SAFETY: `key` is open and closed below; strings end in a NUL.
+    let status = unsafe {
+        let status = if enabled {
+            let exe = std::env::current_exe().map_err(|err| err.to_string())?;
+            let value: Vec<u16> = format!("\"{}\"", exe.display())
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let bytes = std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len() * 2);
+            RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes))
+        } else {
+            match RegDeleteValueW(key, PCWSTR(name.as_ptr())) {
+                status if status == ERROR_FILE_NOT_FOUND => ERROR_SUCCESS,
+                status => status,
+            }
+        };
+        let _ = RegCloseKey(key);
+        status
+    };
+    if status == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not change the startup setting ({}).",
+            status.0
+        ))
+    }
+}
+
+fn startup_value_set(path: &str) -> Result<bool> {
+    let Some(key) = open_key(path, KEY_QUERY_VALUE)? else {
+        return Ok(false);
+    };
+    let name = HSTRING::from(RUN_VALUE);
+    // SAFETY: only asks whether the value exists.
+    let status = unsafe {
+        let status = RegQueryValueExW(key, PCWSTR(name.as_ptr()), None, None, None, None);
+        let _ = RegCloseKey(key);
+        status
+    };
+    Ok(status == ERROR_SUCCESS)
+}
+
 impl WindowLifecycleProvider for Shell {
     fn set_start_at_login(&self, enabled: bool) -> Result<()> {
-        let key = open_run_key(KEY_SET_VALUE)?;
-        let name = HSTRING::from(RUN_VALUE);
-        // SAFETY: `key` is open and closed below; strings end in a NUL.
-        let status = unsafe {
-            let status = if enabled {
-                let exe = std::env::current_exe().map_err(|err| err.to_string())?;
-                let value: Vec<u16> = format!("\"{}\"", exe.display())
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let bytes =
-                    std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len() * 2);
-                RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes))
-            } else {
-                match RegDeleteValueW(key, PCWSTR(name.as_ptr())) {
-                    status if status == ERROR_FILE_NOT_FOUND => ERROR_SUCCESS,
-                    status => status,
-                }
-            };
-            let _ = RegCloseKey(key);
-            status
-        };
-        if status == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(format!(
-                "Could not change the startup setting ({}).",
-                status.0
-            ))
-        }
+        set_startup_value(RUN_KEY, enabled)
     }
 
     fn start_at_login(&self) -> Result<bool> {
-        let key = open_run_key(KEY_QUERY_VALUE)?;
-        let name = HSTRING::from(RUN_VALUE);
-        // SAFETY: only asks whether the value exists.
-        let status = unsafe {
-            let status = RegQueryValueExW(key, PCWSTR(name.as_ptr()), None, None, None, None);
-            let _ = RegCloseKey(key);
-            status
-        };
-        Ok(status == ERROR_SUCCESS)
+        startup_value_set(RUN_KEY)
     }
 
     fn fullscreen_active(&self) -> bool {
@@ -275,6 +323,27 @@ mod tests {
         if before {
             Shell.set_start_at_login(true).unwrap();
         }
+    }
+
+    /// A profile can have no Run key at all: that is off, turning it off is done, and turning it on makes the key.
+    #[test]
+    fn a_startup_key_that_is_not_there_is_not_an_error() {
+        let path = format!("Software\\Keenu-test-{}", std::process::id());
+        assert!(!startup_value_set(&path).unwrap());
+        set_startup_value(&path, false).unwrap();
+        set_startup_value(&path, true).unwrap();
+        assert!(startup_value_set(&path).unwrap());
+        set_startup_value(&path, false).unwrap();
+        assert!(!startup_value_set(&path).unwrap());
+        let wide = HSTRING::from(path.as_str());
+        // SAFETY: removes the empty key this test made.
+        let status = unsafe {
+            windows::Win32::System::Registry::RegDeleteKeyW(
+                HKEY_CURRENT_USER,
+                PCWSTR(wide.as_ptr()),
+            )
+        };
+        assert_eq!(status, ERROR_SUCCESS);
     }
 
     #[test]
