@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 zickrian
 
-//! AI plan usage for the island: Claude's, ChatGPT's and Grok's limits, read where each CLI's /usage or
-//! /status reads them (Codex's session logs fill in). Warns once as a limit nears.
+//! AI plan usage for the island, from what is on this computer: Codex's own session logs for ChatGPT's limits, and
+//! the plan's name for Claude and Grok. Sign-in tokens are never read or sent: a provider's sign-in is for its own
+//! program, and each program's /usage shows what Keenu cannot. Warns once as a limit nears.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -19,31 +20,19 @@ use zbus::{fdo, interface};
 use crate::clock::now_ms;
 use crate::store::Store;
 
-/// Codex's local logs are read each minute while signed in; Claude is asked every 10, backing off to an
-/// hour after failures so its server is never pressed. Nothing runs while locked or with usage off.
+/// Codex's local logs are read each minute while signed in. Nothing runs while locked or with usage off.
 const LOCAL_EVERY: Duration = Duration::from_secs(60);
-const CLAUDE_EVERY: Duration = Duration::from_secs(10 * 60);
-const CLAUDE_BACKOFF: Duration = Duration::from_secs(60 * 60);
-/// Without Codex signed in, the sign-in files are looked for this often, or when Claude is due.
+/// Without Codex signed in, the sign-in files are looked for this often.
 const NOTHING_SIGNED_IN_EVERY: Duration = Duration::from_secs(30 * 60);
 /// The shortest sleep, so a deadline just missed never spins.
 const MIN_WAIT: Duration = Duration::from_secs(1);
-/// Offline (as at login, before the network is up), Claude is asked again after these, then as usual.
-const OFFLINE_RETRIES: [Duration; 4] = [
-    Duration::from_secs(30),
-    Duration::from_secs(60),
-    Duration::from_secs(2 * 60),
-    Duration::from_secs(5 * 60),
-];
 /// Only the end of a Codex log is read: its newest limits are written last.
 const CODEX_TAIL: u64 = 256 * 1024;
-/// Asked to refresh (the page opened), Claude is asked again only after this long.
-const CLAUDE_AT_MOST: Duration = Duration::from_secs(2 * 60);
-const CLAUDE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Only Codex's newest session logs are looked at.
 const CODEX_FILES: usize = 8;
-/// Where Codex's /status reads the plan and its limits.
-const CODEX_USAGE: &str = "https://chatgpt.com/backend-api/wham/usage";
+/// Said where a provider keeps its limits to itself.
+const CLAUDE_ELSEWHERE: &str = "Run /usage in Claude Code to see this plan's limits";
+const GROK_ELSEWHERE: &str = "Run /usage in Grok to see this plan's limits";
 
 /// Every plan's limits, as the page draws them.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
@@ -61,9 +50,9 @@ pub struct Provider {
     pub windows: Vec<Window>,
     /// When the numbers were read; 0 when never.
     pub updated_ms: i64,
-    /// Why the numbers may be old ("Open Claude Code to refresh its sign-in"); empty when fresh.
+    /// Why the numbers may be old ("As of Codex's last use"); empty when fresh.
     pub note: String,
-    /// With no limits to show, why ("Grok doesn’t share…"); empty for the page's own words.
+    /// With no limits to show, why; empty for the page's own words.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub empty: String,
 }
@@ -102,7 +91,7 @@ fn on() -> bool {
 impl Default for Config {
     /// Usage off, warnings at 80% and 95%.
     fn default() -> Self {
-        // Off until the extension says otherwise, so nothing is asked of Claude unbidden.
+        // Off until the extension says otherwise.
         Self {
             enabled: false,
             claude: true,
@@ -148,7 +137,7 @@ impl UsageService {
         Ok(())
     }
 
-    /// Reads the usage again now, Claude's too.
+    /// Reads the usage again now.
     fn refresh(&self) {
         self.refresh.notify_one();
     }
@@ -177,19 +166,8 @@ type Alerted = BTreeMap<String, u8>;
 pub async fn run(iface: InterfaceRef<UsageService>, refresh: Arc<Notify>) {
     let mut store: Store<Alerted> = Store::new("usage-alerts");
     let mut alerted = store.load();
-    let mut claude: Option<Provider> = None;
-    let mut asked_claude: Option<Instant> = None;
-    let mut claude_wait = CLAUDE_EVERY;
-    // Failures in a row, and how the last ask went wrong (`None`: it did not).
-    let mut failures = 0;
-    let mut last_error = None;
-    let mut grok: Option<Provider> = None;
-    let mut asked_grok: Option<Instant> = None;
-    let mut grok_wait = CLAUDE_EVERY;
-    let mut grok_failures = 0;
-    let mut grok_last_error = None;
     let mut codex = CodexReader::default();
-    // Unlocking wakes the loop, to ask Claude if it came due meanwhile.
+    // Unlocking wakes the loop, to read what came meanwhile.
     let mut locked = crate::system::locked();
     // Until Settings sends its config, and while usage is off, no timer at all: `None`.
     let mut next = None;
@@ -213,92 +191,24 @@ pub async fn run(iface: InterfaceRef<UsageService>, refresh: Arc<Notify>) {
             continue;
         }
         let mut providers = Vec::new();
-        if config.claude && claude_sign_in().exists() {
-            let due = |every| asked_claude.is_none_or(|at: Instant| at.elapsed() >= every);
-            // Opening the page asks sooner, but never while Claude's server is given time after failing.
-            if (forced && page_wait(last_error).is_some_and(due)) || (!paused && due(claude_wait)) {
-                asked_claude = Some(Instant::now());
-                let fresh = tokio::task::spawn_blocking(read_claude).await.ok();
-                failures = if matches!(fresh, Some(Ok(_))) {
-                    0
-                } else {
-                    failures + 1
-                };
-                last_error = match &fresh {
-                    Some(Err(why)) => Some(*why),
-                    _ => None,
-                };
-                claude_wait = wait_after(fresh.as_ref().map(|r| r.as_ref().map(|_| ())), failures);
-                // Another plan than the assistant knows: it looks at the models again.
-                if let Some(Ok(fresh)) = &fresh {
-                    crate::assistant::plan_seen("claude", &fresh.plan);
-                }
-                claude = match (fresh, claude.take()) {
-                    (Some(Ok(fresh)), _) => Some(fresh),
-                    // The last numbers stay, saying why they are old.
-                    (Some(Err(why)), Some(mut last)) => Some(Provider {
-                        note: why.note().into(),
-                        ..std::mem::take(&mut last)
-                    }),
-                    (Some(Err(why)), None) => Some(Provider {
-                        note: why.note().into(),
-                        ..claude_shell()
-                    }),
-                    (None, last) => last,
-                };
-            }
-            providers.extend(claude.clone());
-        } else {
-            claude = None;
+        if config.claude && crate::assistant::claude_signed_in() {
+            let claude = claude_shell();
+            // Another plan than the assistant knows: it looks at the models again.
+            crate::assistant::plan_seen("claude", &claude.plan);
+            providers.push(claude);
         }
         if config.grok && grok_auth().exists() {
-            let due = |every| asked_grok.is_none_or(|at: Instant| at.elapsed() >= every);
-            if (forced && grok_page_wait(grok_last_error).is_some_and(due))
-                || (!paused && due(grok_wait))
-            {
-                asked_grok = Some(Instant::now());
-                let fresh = tokio::task::spawn_blocking(read_grok).await.ok();
-                grok_failures = if matches!(fresh, Some(Ok(_))) {
-                    0
-                } else {
-                    grok_failures + 1
-                };
-                grok_last_error = match &fresh {
-                    Some(Err(why)) => Some(*why),
-                    _ => None,
-                };
-                grok_wait = grok_wait_after(
-                    fresh.as_ref().map(|r| r.as_ref().map(|_| ())),
-                    grok_failures,
-                );
-                if let Some(Ok(fresh)) = &fresh {
-                    crate::assistant::plan_seen("grok", &fresh.plan);
-                }
-                grok = match (fresh, grok.take()) {
-                    (Some(Ok(fresh)), _) => Some(fresh),
-                    (Some(Err(why)), Some(mut last)) => Some(Provider {
-                        note: why.note().into(),
-                        ..std::mem::take(&mut last)
-                    }),
-                    (Some(Err(why)), None) => Some(Provider {
-                        note: why.note().into(),
-                        ..grok_shell()
-                    }),
-                    (None, last) => last,
-                };
-            }
-            providers.extend(grok.clone());
-        } else {
-            grok = None;
+            let grok = grok_shell();
+            crate::assistant::plan_seen("grok", &grok.plan);
+            providers.push(grok);
         }
         if config.codex && paused && !forced {
             // Locked, nobody sees them: the last numbers stand until unlocking wakes the loop.
             providers.extend(codex.shown.clone());
         } else if config.codex {
-            // File work and a request: done on a blocking thread, as Claude's request is.
             let mut reader = std::mem::take(&mut codex);
             if let Ok((back, read)) = tokio::task::spawn_blocking(move || {
-                let read = reader.read(forced, paused);
+                let read = reader.read();
                 (reader, read)
             })
             .await
@@ -322,46 +232,24 @@ pub async fn run(iface: InterfaceRef<UsageService>, refresh: Arc<Notify>) {
                 warn!("could not send a usage alert: {err}");
             }
         }
-        let due_in = |asked: Option<Instant>, wait: Duration| {
-            wait.saturating_sub(asked.map_or(Duration::ZERO, |at| at.elapsed()))
-        };
-        let claude_due_in = claude
-            .as_ref()
-            .filter(|_| !paused)
-            .map(|_| due_in(asked_claude, claude_wait));
-        let grok_due_in = grok
-            .as_ref()
-            .filter(|_| !paused)
-            .map(|_| due_in(asked_grok, grok_wait));
-        let remote_due = match (claude_due_in, grok_due_in) {
-            (Some(claude_in), Some(grok_in)) => Some(claude_in.min(grok_in)),
-            (due, None) | (None, due) => due,
-        };
         next = Some(next_wait(
             config.codex && !paused && codex_signed_in(),
-            remote_due,
             next_reset(&providers, now_ms()),
         ));
         publish(&iface, Usage { providers }).await;
     }
 }
 
-/// How long to sleep: until Claude or Grok is due (`None`: not asked) or a window resets, and at most a
-/// minute while Codex is signed in; otherwise only now and then, for a sign-in to come.
-fn next_wait(
-    codex_signed_in: bool,
-    claude_due_in: Option<Duration>,
-    next_reset: Option<Duration>,
-) -> Duration {
+/// How long to sleep: until a window resets, and at most a minute while Codex is signed in; otherwise only
+/// now and then, for a sign-in to come.
+fn next_wait(codex_signed_in: bool, next_reset: Option<Duration>) -> Duration {
     let longest = if codex_signed_in {
         LOCAL_EVERY
     } else {
         NOTHING_SIGNED_IN_EVERY
     };
-    [claude_due_in, next_reset]
-        .into_iter()
-        .flatten()
-        .fold(longest, Duration::min)
+    next_reset
+        .map_or(longest, |reset| reset.min(longest))
         .max(MIN_WAIT)
 }
 
@@ -373,36 +261,6 @@ fn next_reset(providers: &[Provider], now: i64) -> Option<Duration> {
         .filter(|window| window.resets_at_ms > now)
         .map(|window| Duration::from_millis((window.resets_at_ms - now) as u64))
         .min()
-}
-
-/// How long until Claude is asked again after `outcome` (`None` when the read itself broke), the
-/// `failures`th failure in a row.
-fn wait_after(outcome: Option<Result<(), &ClaudeError>>, failures: usize) -> Duration {
-    match outcome {
-        Some(Ok(())) => CLAUDE_EVERY,
-        // Only the sign-in file was read: look again soon, for Claude Code renewing it.
-        Some(Err(ClaudeError::NeedsRefresh)) => CLAUDE_AT_MOST,
-        Some(Err(ClaudeError::Offline)) => OFFLINE_RETRIES
-            .get(failures.saturating_sub(1))
-            .copied()
-            .unwrap_or(CLAUDE_EVERY),
-        Some(Err(ClaudeError::SignIn)) => CLAUDE_EVERY,
-        Some(Err(ClaudeError::Busy)) | None => {
-            let doubled = 2u32.saturating_pow(u32::try_from(failures).unwrap_or(u32::MAX));
-            CLAUDE_EVERY.saturating_mul(doubled).min(CLAUDE_BACKOFF)
-        }
-    }
-}
-
-/// How soon after the last ask opening the page asks Claude again, after `last` went wrong (`None`: it
-/// did not); `None` while its server is given time after failing.
-fn page_wait(last: Option<ClaudeError>) -> Option<Duration> {
-    match last {
-        Some(ClaudeError::Busy) => None,
-        // Nothing reached the server: offline, or only the sign-in file was read.
-        Some(ClaudeError::Offline | ClaudeError::NeedsRefresh) => Some(OFFLINE_RETRIES[0]),
-        Some(ClaudeError::SignIn) | None => Some(CLAUDE_AT_MOST),
-    }
 }
 
 /// Whether Codex is signed in, so its logs may yet bring limits worth a look each minute.
@@ -483,320 +341,51 @@ fn marks_passed(
     passed
 }
 
-/// Why Claude's limits could not be read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClaudeError {
-    /// The sign-in ran out; Claude Code renews it once opened.
-    NeedsRefresh,
-    /// No sign-in, or the server turned it down.
-    SignIn,
-    /// No network (yet).
-    Offline,
-    /// The server failed or answered in a way not understood.
-    Busy,
-}
-
-impl ClaudeError {
-    /// What the page says, under the last numbers.
-    fn note(self) -> &'static str {
-        match self {
-            ClaudeError::NeedsRefresh => "Open Claude Code to refresh its sign-in",
-            ClaudeError::SignIn => "Sign in again with Claude Code",
-            ClaudeError::Offline => "Offline; showing the last numbers",
-            ClaudeError::Busy => "Could not reach Claude; showing the last numbers",
-        }
-    }
-}
-
-/// Where Claude Code keeps its sign-in.
-fn claude_sign_in() -> std::path::PathBuf {
-    crate::assistant::claude_config_dir().join(".credentials.json")
-}
-
-/// Claude with its plan, before any limits are read.
+/// Claude with its plan's name. Its limits stay with Claude Code: reading them would take its sign-in.
 fn claude_shell() -> Provider {
     Provider {
         id: "claude".into(),
         name: "Claude".into(),
         // As the assistant's Settings and Claude Code name it ("Team").
         plan: crate::assistant::claude_plan(),
+        empty: CLAUDE_ELSEWHERE.into(),
         ..Provider::default()
     }
 }
 
-/// Claude's limits now, with Claude Code's sign-in (read, never refreshed: that is Claude Code's to do).
-fn read_claude() -> Result<Provider, ClaudeError> {
-    let text = std::fs::read_to_string(claude_sign_in()).map_err(|_| ClaudeError::SignIn)?;
-    let sign_in: Value = serde_json::from_str(&text).map_err(|_| ClaudeError::SignIn)?;
-    let oauth = &sign_in["claudeAiOauth"];
-    let token = oauth["accessToken"].as_str().ok_or(ClaudeError::SignIn)?;
-    if oauth["expiresAt"]
-        .as_i64()
-        .is_some_and(|expires| expires <= now_ms())
-    {
-        return Err(ClaudeError::NeedsRefresh);
-    }
-    let response: Value =
-        crate::http::get("https://api.anthropic.com/api/oauth/usage", CLAUDE_TIMEOUT)
-            .header("Authorization", &format!("Bearer {token}"))
-            .header("anthropic-beta", "oauth-2025-04-20")
-            // Said plainly who asks, never another app.
-            .header("User-Agent", concat!("Keenu/", env!("CARGO_PKG_VERSION")))
-            .call()
-            .and_then(|mut reply| reply.body_mut().read_json())
-            .map_err(|err| {
-                warn!("could not read Claude's usage: {err}");
-                match err {
-                    ureq::Error::StatusCode(401 | 403) => ClaudeError::SignIn,
-                    ureq::Error::StatusCode(_) | ureq::Error::Json(_) => ClaudeError::Busy,
-                    _ => ClaudeError::Offline,
-                }
-            })?;
-    Ok(Provider {
-        windows: claude_windows(&response),
-        updated_ms: now_ms(),
-        ..claude_shell()
-    })
-}
-
-/// The limits Claude reports for this plan, in its order: "5 hours", "Week", "Week · Opus"…
-fn claude_windows(response: &Value) -> Vec<Window> {
-    if let Some(limits) = response["limits"].as_array() {
-        return limits
-            .iter()
-            .filter_map(|limit| {
-                let label = match limit["group"].as_str().or(limit["kind"].as_str())? {
-                    "session" => "5 hours".to_owned(),
-                    "weekly" | "weekly_all" | "weekly_scoped" => "Week".to_owned(),
-                    other => title_case(other),
-                };
-                let model = limit["scope"]["model"]["display_name"]
-                    .as_str()
-                    .filter(|m| !m.is_empty());
-                Some(Window {
-                    label: model.map_or(label.clone(), |model| format!("{label} · {model}")),
-                    percent: limit["percent"].as_f64()?,
-                    resets_at_ms: limit["resets_at"].as_str().map_or(0, rfc3339_ms),
-                })
-            })
-            .collect();
-    }
-    // The older shape: one object per window.
-    [
-        ("five_hour", "5 hours"),
-        ("seven_day", "Week"),
-        ("seven_day_opus", "Week · Opus"),
-    ]
-    .iter()
-    .filter_map(|(key, label)| {
-        let window = response.get(*key).filter(|w| !w.is_null())?;
-        Some(Window {
-            label: (*label).into(),
-            percent: window["utilization"].as_f64()?,
-            resets_at_ms: window["resets_at"].as_str().map_or(0, rfc3339_ms),
-        })
-    })
-    .collect()
-}
-
-/// Why Grok's allowance could not be read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GrokError {
-    /// The sign-in ran out; Grok renews it once opened.
-    NeedsRefresh,
-    /// No sign-in, or the server turned it down.
-    SignIn,
-    /// No network (yet).
-    Offline,
-    /// The server failed or answered in a way not understood.
-    Busy,
-}
-
-impl GrokError {
-    /// What the page says, under the last numbers.
-    fn note(self) -> &'static str {
-        match self {
-            GrokError::NeedsRefresh => "Open Grok to refresh its sign-in",
-            GrokError::SignIn => "Sign in again with Grok",
-            GrokError::Offline => "Offline; showing the last numbers",
-            GrokError::Busy => "Could not reach Grok; showing the last numbers",
-        }
-    }
-
-    /// Grok's failures map onto Claude's, so both back off alike.
-    fn as_claude(self) -> ClaudeError {
-        match self {
-            GrokError::NeedsRefresh => ClaudeError::NeedsRefresh,
-            GrokError::SignIn => ClaudeError::SignIn,
-            GrokError::Offline => ClaudeError::Offline,
-            GrokError::Busy => ClaudeError::Busy,
-        }
-    }
-}
-
-/// Where Grok keeps its sign-in.
+/// Where Grok keeps its sign-in, which is only looked for, never read.
 fn grok_auth() -> std::path::PathBuf {
     crate::assistant::grok_home().join("auth.json")
 }
 
-/// Grok with its plan, before its allowance is read.
+/// Grok with its plan's name, as Grok last cached it.
 fn grok_shell() -> Provider {
     Provider {
         id: "grok".into(),
         name: "Grok".into(),
         plan: crate::assistant::grok_plan(),
+        empty: GROK_ELSEWHERE.into(),
         ..Provider::default()
     }
 }
 
-/// How long until Grok is asked again; the same pauses as Claude's, it is the same kind of request.
-fn grok_wait_after(outcome: Option<Result<(), &GrokError>>, failures: usize) -> Duration {
-    let mapped = outcome.map(|result| result.map_err(|err| err.as_claude()));
-    wait_after(
-        mapped.as_ref().map(|result| result.as_ref().map(|_| ())),
-        failures,
-    )
-}
-
-/// Grok's take on `page_wait`.
-fn grok_page_wait(last: Option<GrokError>) -> Option<Duration> {
-    page_wait(last.map(GrokError::as_claude))
-}
-
-/// Grok's allowance now, with Grok's sign-in (read, never refreshed: that is Grok's to do).
-fn read_grok() -> Result<Provider, GrokError> {
-    Ok(grok_live(&grok_billing()?, now_ms()))
-}
-
-/// What Grok's billing says for this sign-in, as its CLI's /usage asks.
-fn grok_billing() -> Result<Value, GrokError> {
-    let sign_in = crate::assistant::grok_sign_in().ok_or(GrokError::SignIn)?;
-    if sign_in.expires_ms > 0 && sign_in.expires_ms <= now_ms() {
-        return Err(GrokError::NeedsRefresh);
-    }
-    let mut request = crate::http::get(&crate::assistant::grok_billing_url(), CLAUDE_TIMEOUT)
-        .header("Authorization", &format!("Bearer {}", sign_in.token))
-        .header("X-XAI-Token-Auth", "xai-grok-cli")
-        .header("x-userid", &sign_in.user_id)
-        // Said plainly who asks, never another app.
-        .header("User-Agent", concat!("Keenu/", env!("CARGO_PKG_VERSION")));
-    if let Some(version) = crate::assistant::grok_client_version() {
-        request = request.header("x-grok-client-version", &version);
-    }
-    let response: Value = request
-        .call()
-        .and_then(|mut reply| reply.body_mut().read_json())
-        .map_err(|err| {
-            warn!("could not read Grok's usage: {err}");
-            match err {
-                ureq::Error::StatusCode(401 | 403) => GrokError::SignIn,
-                ureq::Error::StatusCode(_) | ureq::Error::Json(_) => GrokError::Busy,
-                _ => GrokError::Offline,
-            }
-        })?;
-    Ok(response)
-}
-
-/// The allowance Grok's /usage shows: the included share of this period, and on-demand once it is used.
-fn grok_live(response: &Value, now: i64) -> Provider {
-    let config = &response["config"];
-    let mut windows = Vec::new();
-    let resets = config["currentPeriod"]["end"]
-        .as_str()
-        .or(config["billingPeriodEnd"].as_str())
-        .map(rfc3339_ms)
-        .unwrap_or(0);
-    if let Some(percent) = config["creditUsagePercent"].as_f64() {
-        windows.push(Window {
-            label: grok_period(config["currentPeriod"]["type"].as_str().unwrap_or_default()),
-            percent,
-            resets_at_ms: resets,
-        });
-    } else if let (Some(limit), Some(used)) = (
-        config["monthlyLimit"]["val"]
-            .as_i64()
-            .or(config["monthly_limit"]["val"].as_i64()),
-        config["used"]["val"].as_i64(),
-    ) && limit > 0
-    {
-        windows.push(Window {
-            label: "Month".into(),
-            percent: used as f64 / limit as f64 * 100.0,
-            resets_at_ms: resets,
-        });
-    }
-    let cap = config["onDemandCap"]["val"].as_i64().unwrap_or(0);
-    let extra = config["onDemandUsed"]["val"].as_i64().unwrap_or(0);
-    if cap > 0 && extra > 0 {
-        windows.push(Window {
-            label: "On demand".into(),
-            percent: extra as f64 / cap as f64 * 100.0,
-            resets_at_ms: resets,
-        });
-    }
-    // A Free plan reports its week but no share of it: nothing to draw, so the page says why.
-    let empty = if windows.is_empty() {
-        "Grok doesn’t share how much of this plan is used".into()
-    } else {
-        String::new()
-    };
-    Provider {
-        windows,
-        updated_ms: now,
-        empty,
-        ..grok_shell()
-    }
-}
-
-/// Grok's period type ("WEEKLY") as a window label.
-fn grok_period(kind: &str) -> String {
-    let kind = kind.to_ascii_lowercase();
-    if kind.contains("week") {
-        "Week".into()
-    } else if kind.contains("month") {
-        "Month".into()
-    } else if kind.contains("day") {
-        "Day".into()
-    } else {
-        "Limit".into()
-    }
-}
-
-/// ChatGPT's plan and limits: asked as Codex's /status does, as often as Claude's, and in between as Codex
-/// last saw them in its logs (read again only when its newest log changed).
+/// ChatGPT's plan and limits as Codex last saw them in its logs (read again only when its newest log changed).
 #[derive(Default)]
 struct CodexReader {
     seen: Option<(PathBuf, std::time::SystemTime)>,
     last: Option<Provider>,
-    live: Option<Provider>,
-    asked: Option<Instant>,
     /// What `read` gave last, shown again while the screen is locked.
     shown: Option<Provider>,
 }
 
 impl CodexReader {
-    /// The newest of what ChatGPT said and what Codex logged, with the plan as ChatGPT says it now (an
-    /// upgrade shows at once); `None` without Codex. `forced`: the page opened; `paused`: the screen is locked.
-    fn read(&mut self, forced: bool, paused: bool) -> Option<Provider> {
-        let due = |every| self.asked.is_none_or(|at: Instant| at.elapsed() >= every);
-        if (forced && due(CLAUDE_AT_MOST)) || (!paused && due(CLAUDE_EVERY)) {
-            self.asked = Some(Instant::now());
-            // Failed (offline, signed out), the last answer stands and the logs fill in.
-            if let Some(fresh) = read_codex_live() {
-                // Another plan than the assistant knows: it looks at the models again.
-                crate::assistant::plan_seen("codex", &fresh.plan);
-                self.live = Some(fresh);
-            }
+    /// What Codex logged; `None` without Codex.
+    fn read(&mut self) -> Option<Provider> {
+        self.shown = self.read_logs();
+        if let Some(shown) = &self.shown {
+            // Another plan than the assistant knows: it looks at the models again.
+            crate::assistant::plan_seen("codex", &shown.plan);
         }
-        let logged = self.read_logs();
-        self.shown = match (self.live.clone(), logged) {
-            (Some(live), Some(logged)) if logged.updated_ms > live.updated_ms => Some(Provider {
-                plan: live.plan,
-                ..logged
-            }),
-            (Some(live), _) => Some(live),
-            (None, logged) => logged,
-        };
         self.shown.clone()
     }
 
@@ -826,51 +415,6 @@ impl CodexReader {
             .take(CODEX_FILES)
             .find_map(|file| codex_limits(file));
         self.last.clone()
-    }
-}
-
-/// ChatGPT's plan and limits now, with Codex's sign-in (read, never refreshed: that is Codex's to do);
-/// `None` when signed out, offline or refused.
-fn read_codex_live() -> Option<Provider> {
-    let text = std::fs::read_to_string(crate::assistant::codex_home().join("auth.json")).ok()?;
-    let sign_in: Value = serde_json::from_str(&text).ok()?;
-    let token = sign_in["tokens"]["access_token"].as_str()?;
-    let mut request = crate::http::get(CODEX_USAGE, CLAUDE_TIMEOUT)
-        .header("Authorization", &format!("Bearer {token}"))
-        // Said plainly who asks, never another app.
-        .header("User-Agent", concat!("Keenu/", env!("CARGO_PKG_VERSION")));
-    if let Some(account) = sign_in["tokens"]["account_id"].as_str() {
-        request = request.header("ChatGPT-Account-Id", account);
-    }
-    let response: Value = request
-        .call()
-        .and_then(|mut reply| reply.body_mut().read_json())
-        .map_err(|err| warn!("could not read ChatGPT's usage: {err}"))
-        .ok()?;
-    Some(codex_live(&response, now_ms()))
-}
-
-/// The answer of ChatGPT's usage endpoint as a provider read at `now`.
-fn codex_live(response: &Value, now: i64) -> Provider {
-    let limits = &response["rate_limit"];
-    let windows = ["primary_window", "secondary_window"]
-        .iter()
-        .filter_map(|key| {
-            let window = limits.get(*key).filter(|w| !w.is_null())?;
-            Some(Window {
-                label: window_label(window["limit_window_seconds"].as_i64().unwrap_or(0) / 60),
-                percent: window["used_percent"].as_f64()?,
-                resets_at_ms: window["reset_at"].as_i64().map_or(0, |s| s * 1000),
-            })
-        })
-        .collect();
-    Provider {
-        id: "codex".into(),
-        name: "ChatGPT".into(),
-        plan: crate::assistant::codex_plan(response["plan_type"].as_str().unwrap_or_default()),
-        windows,
-        updated_ms: now,
-        ..Provider::default()
     }
 }
 
@@ -970,100 +514,48 @@ fn rfc3339_ms(text: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(text).map_or(0, |t| t.timestamp_millis())
 }
 
-/// A limit's kind as a label: "weekly_opus" reads "Weekly Opus".
-fn title_case(text: &str) -> String {
-    text.split(['_', ' '])
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or(String::new(), |first| {
-                first.to_uppercase().chain(chars).collect()
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
 
+    /// Sign-ins belong to each provider's own program: nothing here may read one or call home with one.
     #[test]
-    fn reads_chatgpts_plan_and_limits_as_status_does() {
-        // A free account, as the endpoint answered on 2026-10-26: one 30-day window.
-        let free = json!({"plan_type": "free", "rate_limit": {"allowed": true, "limit_reached": false,
-            "primary_window": {"used_percent": 82, "limit_window_seconds": 2_592_000,
-                "reset_after_seconds": 2_464_312, "reset_at": 1_795_444_424},
-            "secondary_window": null}});
-        let codex = codex_live(&free, 1_000);
-        assert_eq!((codex.id.as_str(), codex.plan.as_str()), ("codex", "Free"));
-        assert_eq!(codex.updated_ms, 1_000);
-        assert_eq!(
-            codex.windows,
-            [Window {
-                label: "30 days".into(),
-                percent: 82.0,
-                resets_at_ms: 1_795_444_424_000
-            }]
-        );
-        // A paid one: 5 hours and a week.
-        let pro = json!({"plan_type": "prolite", "rate_limit": {
-            "primary_window": {"used_percent": 5, "limit_window_seconds": 18_000, "reset_at": 10},
-            "secondary_window": {"used_percent": 23, "limit_window_seconds": 604_800, "reset_at": 20}}});
-        let codex = codex_live(&pro, 0);
-        // As Codex names it.
-        assert_eq!(codex.plan, "Pro");
-        let labels: Vec<&str> = codex.windows.iter().map(|w| w.label.as_str()).collect();
-        assert_eq!(labels, ["5 hours", "Week"]);
+    fn no_sign_in_token_is_read_or_sent() {
+        let source = include_str!("usage.rs");
+        // Built up, so this test's own words do not match.
+        for word in [
+            concat!("access", "Token"),
+            concat!("access", "_token"),
+            concat!("Bea", "rer "),
+            concat!(".creden", "tials.json"),
+            concat!("api/oauth", "/usage"),
+            concat!("backend-api", "/wham"),
+            concat!("billing", "?format"),
+        ] {
+            assert!(!source.contains(word), "usage.rs mentions {word}");
+        }
     }
 
     #[test]
-    fn reads_groks_weekly_allowance() {
-        // As Grok's billing endpoint answered: one weekly pool, on-demand unused, products are slices of it.
-        let response = json!({"config": {
-            "creditUsagePercent": 51.0,
-            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY",
-                "end": "2026-10-27T09:17:29.281618+00:00"},
-            "onDemandCap": {"val": 10},
-            "onDemandUsed": {"val": 0},
-            "productUsage": [{"product": "GrokBuild", "usagePercent": 14.0}]
-        }});
-        let grok = grok_live(&response, 1_000);
-        assert_eq!((grok.id.as_str(), grok.name.as_str()), ("grok", "Grok"));
-        assert_eq!(grok.updated_ms, 1_000);
-        assert_eq!(grok.windows.len(), 1);
-        assert_eq!(grok.windows[0].label, "Week");
-        assert_eq!(grok.windows[0].percent, 51.0);
-        assert!(grok.windows[0].resets_at_ms > 0);
-        // On-demand shows once it is actually used.
-        let over = json!({"config": {"creditUsagePercent": 100.0,
-            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_MONTHLY", "end": "2026-11-01T00:00:00Z"},
-            "onDemandCap": {"val": 500}, "onDemandUsed": {"val": 125}}});
-        let grok = grok_live(&over, 0);
-        let labels: Vec<&str> = grok.windows.iter().map(|w| w.label.as_str()).collect();
-        assert_eq!(labels, ["Month", "On demand"]);
-        assert_eq!(grok.windows[1].percent, 25.0);
+    fn says_where_a_plans_limits_can_be_seen() {
+        assert!(claude_shell().empty.contains("/usage"));
+        assert!(grok_shell().empty.contains("/usage"));
+        assert!(claude_shell().windows.is_empty() && grok_shell().windows.is_empty());
     }
 
     #[test]
     fn sleeps_until_something_is_due() {
         let minutes = |m: u64| Duration::from_secs(m * 60);
         // Codex signed in: its logs each minute.
-        assert_eq!(next_wait(true, Some(minutes(10)), None), LOCAL_EVERY);
-        // Only Claude: until it is due, not each minute.
-        assert_eq!(next_wait(false, Some(minutes(10)), None), minutes(10));
-        assert_eq!(next_wait(false, Some(minutes(60)), None), minutes(30));
+        assert_eq!(next_wait(true, None), LOCAL_EVERY);
         // A window that resets sooner wakes it, to start that window over.
-        assert_eq!(
-            next_wait(false, Some(minutes(10)), Some(minutes(3))),
-            minutes(3)
-        );
-        // Claude not asked (locked, or signed out): only for a sign-in.
-        assert_eq!(next_wait(false, None, None), NOTHING_SIGNED_IN_EVERY);
+        assert_eq!(next_wait(false, Some(minutes(3))), minutes(3));
+        // Nothing to watch: only for a sign-in.
+        assert_eq!(next_wait(false, None), NOTHING_SIGNED_IN_EVERY);
         // Overdue never spins.
-        assert_eq!(next_wait(true, Some(Duration::ZERO), None), MIN_WAIT);
+        assert_eq!(next_wait(true, Some(Duration::ZERO)), MIN_WAIT);
     }
 
     #[test]
@@ -1084,58 +576,6 @@ mod tests {
             Some(Duration::from_millis(2_000))
         );
         assert_eq!(next_reset(&providers, 6_000), None);
-    }
-
-    #[test]
-    fn offline_is_tried_again_soon_and_a_failing_server_ever_later() {
-        let offline = Some(Err(&ClaudeError::Offline));
-        let waits: Vec<u64> = (1..=6).map(|n| wait_after(offline, n).as_secs()).collect();
-        assert_eq!(waits, [30, 60, 120, 300, 600, 600]);
-        let busy = Some(Err(&ClaudeError::Busy));
-        assert_eq!(wait_after(busy, 1), CLAUDE_EVERY * 2);
-        assert_eq!(wait_after(busy, 9), CLAUDE_BACKOFF);
-        assert_eq!(wait_after(Some(Ok(())), 0), CLAUDE_EVERY);
-        assert_eq!(
-            wait_after(Some(Err(&ClaudeError::NeedsRefresh)), 3),
-            CLAUDE_AT_MOST
-        );
-    }
-
-    #[test]
-    fn opening_the_page_asks_claude_at_most_every_two_minutes() {
-        assert_eq!(page_wait(None), Some(CLAUDE_AT_MOST));
-        assert_eq!(page_wait(Some(ClaudeError::SignIn)), Some(CLAUDE_AT_MOST));
-        assert_eq!(
-            page_wait(Some(ClaudeError::Offline)),
-            Some(OFFLINE_RETRIES[0])
-        );
-        assert_eq!(page_wait(Some(ClaudeError::Busy)), None);
-    }
-
-    #[test]
-    fn reads_claudes_limits_whatever_the_plan_has() {
-        let team = json!({"five_hour": {"utilization": 21.0}, "limits": [
-            {"kind": "session", "group": "session", "percent": 21, "resets_at": "2026-10-21T16:10:00+00:00"},
-            {"kind": "weekly_scoped", "group": "weekly", "percent": 0, "resets_at": "2026-10-24T21:00:00+00:00",
-             "scope": {"model": {"display_name": "Fable"}}}]});
-        let windows = claude_windows(&team);
-        assert_eq!(windows.len(), 2);
-        assert_eq!(
-            (windows[0].label.as_str(), windows[0].percent),
-            ("5 hours", 21.0)
-        );
-        assert_eq!(
-            windows[0].resets_at_ms,
-            rfc3339_ms("2026-10-21T16:10:00+00:00")
-        );
-        assert_eq!(windows[1].label, "Week · Fable");
-        let older = json!({"five_hour": {"utilization": 4.0, "resets_at": null}, "seven_day": {"utilization": 31.5},
-            "seven_day_opus": null});
-        let windows = claude_windows(&older);
-        assert_eq!(
-            windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(),
-            ["5 hours", "Week"]
-        );
     }
 
     #[test]
@@ -1305,17 +745,5 @@ mod tests {
         };
         settle(&mut provider, 2_000);
         assert_eq!(provider.windows[0].percent, 0.0);
-    }
-
-    #[test]
-    #[ignore = "asks Grok's server with this computer's sign-in"]
-    fn reads_the_real_grok_usage() {
-        match grok_billing() {
-            Ok(response) => println!(
-                "grok billing: {response}\ngrok: {:?}",
-                grok_live(&response, now_ms())
-            ),
-            Err(err) => println!("grok: {err:?}"),
-        }
     }
 }

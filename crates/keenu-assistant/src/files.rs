@@ -464,6 +464,7 @@ mod tests {
         assert!(root("~/.config/google-chrome", &home).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_link_is_judged_by_where_it_leads() {
         let home = std::env::temp_dir().join(format!("keenu-links-{}", std::process::id()));

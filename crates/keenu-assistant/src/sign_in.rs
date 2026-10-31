@@ -5,8 +5,6 @@
 //! back over the user's, so neither side is left holding one the server has since replaced.
 
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 /// Makes `linked` (Keenu's) a link to `real` (the user's), first handing a renewed sign-in back.
@@ -36,10 +34,22 @@ pub fn share(real: &Path, linked: &Path) {
             Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
             _ => Ok(()),
         })
-        .and_then(|()| std::os::unix::fs::symlink(real, linked));
+        .and_then(|()| link(real, linked));
     if let Err(err) = relinked {
         log::warn!("could not share the sign-in at {}: {err}", real.display());
     }
+}
+
+/// A link where the system lets anyone make one.
+#[cfg(unix)]
+fn link(real: &Path, linked: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(real, linked)
+}
+
+/// Windows lets only some users make links: a copy, kept fresh by `share` each start.
+#[cfg(not(unix))]
+fn link(real: &Path, linked: &Path) -> std::io::Result<()> {
+    fs::copy(real, linked).map(drop)
 }
 
 /// Whether `linked` is a file of its own (no longer the link), newer than the user's `real` one.
@@ -64,31 +74,27 @@ fn renewed(real: &Path, linked: &Path) -> bool {
 fn copy_back(from: &Path, to: &Path) -> std::io::Result<()> {
     let bytes = fs::read(from)?;
     let temp = to.with_extension("keenu-tmp");
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-    }
+    crate::private::write_private(&temp, &bytes)?;
+    fs::File::options().write(true).open(&temp)?.sync_all()?;
     fs::rename(temp, to)
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::time::{Duration, SystemTime};
 
+    #[cfg(unix)]
     use super::*;
 
+    #[cfg(unix)]
     fn aged(path: &Path, seconds_ago: u64) {
         let file = fs::File::options().write(true).open(path).unwrap();
         file.set_modified(SystemTime::now() - Duration::from_secs(seconds_ago))
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_renewed_sign_in_goes_back_and_an_old_copy_is_replaced() {
         let root = std::env::temp_dir().join(format!("keenu-sign-in-{}", std::process::id()));

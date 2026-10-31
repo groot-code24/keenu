@@ -6,23 +6,13 @@
 
 mod agenda;
 mod agent;
-mod agy;
-mod answer;
 mod apps;
-mod brain;
-mod chat;
 mod check;
-mod child;
-mod claude;
-mod codex;
 #[cfg(test)]
 mod eval;
-mod files;
-mod grok;
 mod mic;
 mod models;
 mod music;
-mod sign_in;
 mod system;
 mod tasks;
 mod whisper;
@@ -32,6 +22,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 
+use keenu_assistant::{agy, answer, brain, chat, child, claude, codex, files, grok, soften};
 use keenu_core::voice::{Endpointer, Verdict, meter, rms};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -45,12 +36,9 @@ pub use self::agenda::Sources;
 use self::brain::{Brain, Failure};
 pub use self::brain::{Provider, install_dirs};
 use self::chat::{Chat, Item, Keep};
-pub use self::claude::config_dir as claude_config_dir;
+pub use self::claude::signed_in as claude_signed_in;
 pub use self::codex::user_home as codex_home;
-pub use self::grok::{
-    billing_url as grok_billing_url, client_version as grok_client_version, plan as grok_plan,
-    sign_in as grok_sign_in, user_home as grok_home,
-};
+pub use self::grok::{plan as grok_plan, user_home as grok_home};
 use self::mic::Mic;
 use self::models::{Catalogs, Why};
 pub use self::models::{claude_plan, codex_plan, plan_seen, set_assistant_on};
@@ -290,16 +278,6 @@ fn one_line(text: &str) -> String {
     soften(&text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// `text` with every run of quotes cut to one, so no number of them adds up to a closing \"\"\".
-fn soften(text: &str) -> String {
-    let mut softened = String::with_capacity(text.len());
-    for c in text.chars() {
-        if c != '"' || !softened.ends_with('"') {
-            softened.push(c);
-        }
-    }
-    softened
-}
 
 /// What the D-Bus methods hand the assistant's loop.
 pub enum Command {

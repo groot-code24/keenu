@@ -16,7 +16,6 @@ use chrono::{DateTime, Local, NaiveDate};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::answer::{Answer, SCHEMA};
@@ -65,7 +64,7 @@ pub struct Grok {
 /// The HOME Keenu runs Grok with: GROK_HOME alone still brings the user's ~/.claude skills, hooks and
 /// MCP servers (24k tokens a turn, and Keenu's own hooks firing).
 fn keenu_home() -> PathBuf {
-    crate::store::data_dir().join("grok")
+    keenu_core::paths::data_dir().join("grok")
 }
 
 /// Grok's home for Keenu, inside it; it shares only the user's sign-in.
@@ -111,7 +110,7 @@ impl Grok {
         instructions: &str,
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(workspace)?;
-        crate::store::create_private_dir(&home()).context("could not make Grok's folder")?;
+        crate::private::create_private_dir(&home()).context("could not make Grok's folder")?;
         std::fs::write(home().join("config.toml"), CONFIG)
             .context("could not write Grok's settings")?;
         trust_workspace(workspace);
@@ -164,10 +163,10 @@ impl Grok {
         // Counted until the turn ends, so Grok's index is never deleted under it (see `forget_index`).
         let _running = Running::new();
         let prompt_path = home().join(format!("prompt-{}-{turn}.txt", std::process::id()));
-        crate::store::write_private(&prompt_path, prompt.as_bytes())
+        crate::private::write_private(&prompt_path, prompt.as_bytes())
             .context("could not write Grok's prompt")?;
         let _prompt_file = PromptFile(prompt_path.clone());
-        let mut command = Command::new(&self.program);
+        let mut command = super::child::command(&self.program);
         command
             .arg("--prompt-file")
             .arg(&prompt_path)
@@ -236,9 +235,9 @@ impl Grok {
 /// (listing, models_cache.json, settings_cache.json; the user's own when Keenu's has none yet).
 pub async fn models(program: &Path) -> anyhow::Result<(String, Value, Value)> {
     use tokio::io::AsyncReadExt;
-    crate::store::create_private_dir(&home()).context("could not make Grok's folder")?;
+    crate::private::create_private_dir(&home()).context("could not make Grok's folder")?;
     link_sign_in();
-    let mut command = Command::new(program);
+    let mut command = super::child::command(program);
     command
         .arg("models")
         .arg("--leader-socket")
@@ -461,15 +460,22 @@ fn parse_result(event: &Value) -> anyhow::Result<Answer> {
 }
 
 /// The model in the user's own config.toml (`[models] default`), when they picked none.
-pub(super) fn user_model() -> Option<String> {
+pub fn user_model() -> Option<String> {
     model_in(&std::fs::read_to_string(user_home().join("config.toml")).ok()?)
+}
+
+/// Where a host that keeps a catalog of models says what the plan's default is (see `default_model`).
+static CATALOG_DEFAULT: std::sync::OnceLock<fn() -> String> = std::sync::OnceLock::new();
+
+/// Tells Grok where the host's catalog of models keeps the plan's default.
+pub fn set_catalog_default(read: fn() -> String) {
+    CATALOG_DEFAULT.set(read).ok();
 }
 
 /// The plan's default, for a start with no model (a refused user pick is never retried here). Never left to
 /// Grok: in Keenu's fresh home it picks one a Free plan may not have (grok-4.6).
 async fn default_model(program: &Path) -> String {
-    let catalog = super::models::current().remove("grok");
-    if let Some(default) = catalog.map(|c| c.default).filter(|d| !d.is_empty()) {
+    if let Some(default) = CATALOG_DEFAULT.get().map(|read| read()).filter(|d| !d.is_empty()) {
         return default;
     }
     // Not listed yet (its first request): asked now, once, without holding up keenud for long.
@@ -540,110 +546,27 @@ fn link_sign_in() {
     super::sign_in::share(&user_home().join("auth.json"), &home().join("auth.json"));
 }
 
-/// A sign-in Grok stored: the session token, the user id the billing call names, and when it runs out
-/// (0 when it did not say).
-pub struct SignIn {
-    pub token: String,
-    pub user_id: String,
-    pub expires_ms: i64,
-}
-
 /// Whether Grok has a way to sign in: its own sign-in, or an API key.
 pub fn signed_in() -> bool {
-    std::env::var_os("XAI_API_KEY").is_some_and(|key| !key.is_empty()) || sign_in().is_some()
+    std::env::var_os("XAI_API_KEY").is_some_and(|key| !key.is_empty()) || user_signed_in()
 }
 
-/// The newest sign-in in `auth.json` (several accounts: the one that lasts longest).
-pub fn sign_in() -> Option<SignIn> {
-    let text = std::fs::read_to_string(user_home().join("auth.json")).ok()?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    sign_in_from(&value)
-}
-
-/// Picks from parsed `auth.json`; entries without a token or user id are skipped.
-fn sign_in_from(value: &Value) -> Option<SignIn> {
-    let mut best: Option<SignIn> = None;
-    for entry in value.as_object()?.values() {
-        let Some(token) = entry["key"].as_str().filter(|token| !token.is_empty()) else {
-            continue;
-        };
-        let Some(user_id) = entry["user_id"].as_str().filter(|id| !id.is_empty()) else {
-            continue;
-        };
-        let expires_ms = entry["expires_at"].as_str().map(rfc3339_ms).unwrap_or(0);
-        let better = best
-            .as_ref()
-            .is_none_or(|have| expires_ms >= have.expires_ms);
-        if better {
-            best = Some(SignIn {
-                token: token.to_owned(),
-                user_id: user_id.to_owned(),
-                expires_ms,
-            });
-        }
-    }
-    best
-}
-
-/// The installed Grok's version, as it last wrote it, for the billing call that asks.
-pub fn client_version() -> Option<String> {
-    let text = std::fs::read_to_string(user_home().join("version.json")).ok()?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    value["version"]
-        .as_str()
-        .filter(|version| !version.is_empty())
-        .map(str::to_owned)
-}
-
-/// Where Grok reads the plan's allowance. `$GROK_CLI_CHAT_PROXY_BASE_URL`, else `[endpoints]` in the
-/// user's config, else Grok's own proxy.
-pub fn billing_url() -> String {
-    // Only over https: the request carries the sign-in's token.
-    let base = std::env::var("GROK_CLI_CHAT_PROXY_BASE_URL")
+/// Whether the user's `auth.json` holds a sign-in. It is only recognized here: its token is Grok's alone.
+fn user_signed_in() -> bool {
+    std::fs::read_to_string(user_home().join("auth.json"))
         .ok()
-        .filter(|url| url.trim().starts_with("https://"))
-        .or_else(proxy_from_config)
-        .unwrap_or_else(|| "https://cli-chat-proxy.grok.com/v1".to_owned());
-    format!(
-        "{}/billing?format=credits",
-        base.trim().trim_end_matches('/')
-    )
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|value| holds_a_sign_in(&value))
 }
 
-/// `cli_chat_proxy_base_url` in the `[endpoints]` table of the user's config, https only.
-fn proxy_from_config() -> Option<String> {
-    let config = std::fs::read_to_string(user_home().join("config.toml")).ok()?;
-    let mut in_endpoints = false;
-    for line in config.lines() {
-        let line = line.trim();
-        if let Some(name) = line
-            .strip_prefix('[')
-            .and_then(|rest| rest.strip_suffix(']'))
-        {
-            in_endpoints = name.trim() == "endpoints";
-            continue;
-        }
-        if !in_endpoints {
-            continue;
-        }
-        // Other keys of the table come first too: only this one counts.
-        let Some(value) = line
-            .strip_prefix("cli_chat_proxy_base_url")
-            .and_then(|rest| rest.trim_start().strip_prefix('='))
-        else {
-            continue;
-        };
-        let value = toml_string(value);
-        if value.starts_with("https://") {
-            return Some(value.to_owned());
-        }
-    }
-    None
-}
-
-/// Unix milliseconds, 0 when unreadable.
-fn rfc3339_ms(text: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(text).map_or(0, |time| time.timestamp_millis())
+/// Whether parsed `auth.json` has an entry with a token and a user id.
+fn holds_a_sign_in(value: &Value) -> bool {
+    value.as_object().is_some_and(|entries| {
+        entries.values().any(|entry| {
+            entry["key"].as_str().is_some_and(|key| !key.is_empty())
+                && entry["user_id"].as_str().is_some_and(|id| !id.is_empty())
+        })
+    })
 }
 
 /// Deletes Keenu's Grok conversation `id` now (an id as Grok makes them, never a path).
@@ -866,21 +789,9 @@ mod tests {
         assert_eq!(model_in(commented).as_deref(), Some("grok-4.7"));
         assert_eq!(toml_string("https://p/v1 # corp"), "https://p/v1");
         assert_eq!(toml_string("'a#b' # c"), "a#b");
-        let auth = json!({"https://auth.x.ai::one": {"key": "old", "user_id": "a",
-            "expires_at": "2026-01-01T00:00:00Z"},
-            "https://auth.x.ai::two": {"key": "new", "user_id": "b",
-            "expires_at": "2026-12-01T00:00:00Z"}});
-        let sign_in = sign_in_from(&auth).unwrap();
-        assert_eq!(
-            (sign_in.token.as_str(), sign_in.user_id.as_str()),
-            ("new", "b")
-        );
-        assert!(sign_in.expires_ms > 0);
-    }
-
-    #[test]
-    fn billing_url_stays_on_the_proxy() {
-        assert!(billing_url().starts_with("https://"));
-        assert!(billing_url().ends_with("/billing?format=credits"));
+        let auth = json!({"https://auth.x.ai::one": {"key": "a-token", "user_id": "a"}});
+        assert!(holds_a_sign_in(&auth));
+        assert!(!holds_a_sign_in(&json!({"https://auth.x.ai::one": {"key": "", "user_id": "a"}})));
+        assert!(!holds_a_sign_in(&json!({})));
     }
 }

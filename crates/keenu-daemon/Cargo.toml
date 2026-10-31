@@ -13,7 +13,9 @@ name = "keenud"
 path = "src/main.rs"
 
 [dependencies]
+keenu-assistant.workspace = true
 keenu-core.workspace = true
+keenu-guard.workspace = true
 keenu-integrations.workspace = true
 
 anyhow.workspace = true

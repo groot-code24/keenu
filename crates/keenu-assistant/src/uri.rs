@@ -3,8 +3,6 @@
 
 //! The local path a `file://` URI names (RFC 8089), its `%XX` escapes decoded.
 
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 /// The path of `file:///…`, `file://localhost/…` or `file:/…`; `None` for any other URI or host.
@@ -32,7 +30,22 @@ pub fn to_path(uri: &str) -> Option<PathBuf> {
     if bytes.contains(&0) {
         return None;
     }
-    Some(PathBuf::from(OsString::from_vec(bytes)))
+    Some(from_bytes(bytes))
+}
+
+/// A path of any bytes, as Unix allows.
+#[cfg(unix)]
+fn from_bytes(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+/// `file:///C:/a` is the path `C:\a`.
+#[cfg(not(unix))]
+fn from_bytes(bytes: Vec<u8>) -> PathBuf {
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.strip_prefix('/').filter(|rest| rest.as_bytes().get(1) == Some(&b':')).unwrap_or(&text);
+    PathBuf::from(text)
 }
 
 /// Decodes `%XX` escapes into bytes; invalid escapes are kept as they are.
@@ -66,12 +79,15 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
+    #[cfg(unix)]
     fn path(uri: &str) -> Option<String> {
         to_path(uri).map(|path| path.to_string_lossy().into_owned())
     }
 
+    #[cfg(unix)]
     #[test]
     fn decodes_escaped_names() {
         assert_eq!(
@@ -90,17 +106,20 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_raw_hash_or_question_mark_ends_the_path() {
         assert_eq!(path("file:///a/b#c").as_deref(), Some("/a/b"));
         assert_eq!(path("file:///a/b?c=d").as_deref(), Some("/a/b"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn invalid_escapes_stay_as_they_are() {
         assert_eq!(path("file:///a/100%zz%4").as_deref(), Some("/a/100%zz%4"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_local_files() {
         assert_eq!(path("file://localhost/a").as_deref(), Some("/a"));
@@ -114,8 +133,10 @@ mod tests {
         assert_eq!(path("file:///a%00b"), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn keeps_bytes_that_are_not_utf8() {
+        use std::os::unix::ffi::OsStringExt;
         let raw = to_path("file:///tmp/%FF").unwrap();
         assert_eq!(raw.into_os_string().into_vec(), b"/tmp/\xff");
     }

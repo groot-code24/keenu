@@ -2,8 +2,10 @@
 resolver = "3"
 members = [
     "crates/keenu-app",
+    "crates/keenu-assistant",
     "crates/keenu-core",
     "crates/keenu-daemon",
+    "crates/keenu-guard",
     "crates/keenu-integrations",
     "crates/keenu-macos",
     "crates/keenu-platform",
@@ -19,7 +21,9 @@ members = [
 # are only built when asked for: `cargo build -p keenu-shelf -p keenu-whisper`.
 default-members = [
     "crates/keenu-app",
+    "crates/keenu-assistant",
     "crates/keenu-core",
+    "crates/keenu-guard",
     "crates/keenu-integrations",
     "crates/keenu-platform",
     "crates/keenu-security",
@@ -38,7 +42,9 @@ publish = false
 
 [workspace.dependencies]
 keenu-app = { path = "crates/keenu-app" }
+keenu-assistant = { path = "crates/keenu-assistant" }
 keenu-core = { path = "crates/keenu-core" }
+keenu-guard = { path = "crates/keenu-guard" }
 keenu-integrations = { path = "crates/keenu-integrations" }
 keenu-platform = { path = "crates/keenu-platform" }
 keenu-security = { path = "crates/keenu-security" }

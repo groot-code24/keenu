@@ -23,7 +23,7 @@ mod store;
 mod system;
 mod todo;
 mod updates;
-mod uri;
+use keenu_assistant::uri;
 mod usage;
 
 use anyhow::{Context, bail};

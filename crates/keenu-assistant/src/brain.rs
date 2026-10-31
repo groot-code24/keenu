@@ -53,7 +53,7 @@ impl Provider {
         }
     }
 
-    /// The program's file name.
+    /// The program's name.
     fn command(self) -> &'static str {
         match self {
             Provider::Agy => "agy",
@@ -72,7 +72,15 @@ impl Provider {
             .into_iter()
             .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
             .chain(install_dirs(&home))
-            .map(|dir| dir.join(name))
+            .flat_map(|dir| {
+                // Windows: its own installer's program first, then npm's launcher.
+                let names: &[String] = if cfg!(windows) {
+                    &[format!("{name}.exe"), format!("{name}.cmd")]
+                } else {
+                    &[name.to_owned()]
+                };
+                names.iter().map(|file| dir.join(file)).collect::<Vec<_>>()
+            })
             .find(|path| path.is_file())
     }
 
@@ -189,7 +197,13 @@ fn dirs_in(home: &Path, env_dir: impl Fn(&str) -> Option<PathBuf>) -> Vec<PathBu
     .into_iter()
     .chain(npm_prefix(home, env_dir("NPM_CONFIG_PREFIX")))
     .chain(nvm)
-    .chain([PathBuf::from("/usr/local/bin")])
+    .chain([
+        PathBuf::from("/usr/local/bin"),
+        // Homebrew on Apple silicon.
+        PathBuf::from("/opt/homebrew/bin"),
+    ])
+    .chain(env_dir("APPDATA").map(|dir| dir.join("npm")))
+    .chain(env_dir("LOCALAPPDATA").map(|dir| dir.join("Programs/claude")))
     .collect()
 }
 

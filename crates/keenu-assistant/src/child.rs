@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 zickrian
 
-//! The helpers keenud starts for the assistant (AI CLIs, speech recognition): each leads its own process
-//! group at a lower priority, so the desktop stays smooth and nothing they start outlives them.
+//! The helpers the assistant starts (AI CLIs, speech recognition): each runs at a lower priority and with what it
+//! starts tied to it, so the desktop stays smooth and nothing outlives them.
 
 use std::ops::{Deref, DerefMut};
 
@@ -10,15 +10,69 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command};
 
 /// How much they give way to the desktop (see nice(1)).
+#[cfg(unix)]
 const NICENESS: libc::c_int = 10;
+/// No console window, and below normal priority.
+#[cfg(windows)]
+const CREATION_FLAGS: u32 = 0x0800_0000 | 0x0000_4000;
 /// A line of an AI CLI's output longer than this (a whole file it read, say) is skipped, never kept.
 const MAX_LINE: usize = 8 * 1024 * 1024;
 
-/// A started helper; dropped, its whole process group is killed.
+/// A command for the CLI at `program`. npm's `.cmd` launcher is passed over for the script behind it, as `cmd.exe` cuts
+/// a command line at 8 KB, and the assistant's instructions are longer.
+pub fn command(program: &std::path::Path) -> Command {
+    if let Some((node, script)) = npm_script(program) {
+        let mut command = Command::new(node);
+        command.arg(script);
+        return command;
+    }
+    Command::new(program)
+}
+
+/// The Node and script behind npm's launcher at `program`, on a system that has them.
+fn npm_script(program: &std::path::Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if !program.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cmd")) {
+        return None;
+    }
+    let dir = program.parent()?;
+    let script = script_in(&std::fs::read_to_string(program).ok()?)?;
+    let node = dir.join("node.exe");
+    let node = if node.is_file() {
+        node
+    } else {
+        std::path::PathBuf::from("node")
+    };
+    Some((node, dir.join(script)))
+}
+
+/// What npm's launcher runs: `"%dp0%\\node_modules\\…\\cli.js"`, relative to the launcher's folder.
+fn script_in(launcher: &str) -> Option<String> {
+    let start = launcher.find("%dp0%\\")? + "%dp0%\\".len();
+    launcher[start..].split('"').find_map(|rest| {
+        rest.ends_with(".js").then(|| rest.to_owned())
+    })
+}
+
+/// A started helper; dropped, it goes and takes what it started along.
 pub struct Group(Child);
+
+/// Starts `command` at a lower priority, with no window. Its own folder leads its PATH.
+#[cfg(windows)]
+pub fn spawn(command: &mut Command) -> std::io::Result<Group> {
+    let program = std::path::PathBuf::from(command.as_std().get_program());
+    if let Some(path) = path_for(&program) {
+        command.env("PATH", path);
+    }
+    let child = command
+        .creation_flags(CREATION_FLAGS)
+        .kill_on_drop(true)
+        .spawn()?;
+    Ok(Group(child))
+}
 
 /// Starts `command` in a process group of its own, at a lower priority. Its own folder leads its PATH, so
 /// a CLI that starts with `#!/usr/bin/env node` finds the Node installed beside it (nvm, volta…).
+#[cfg(unix)]
 pub fn spawn(command: &mut Command) -> std::io::Result<Group> {
     let program = std::path::PathBuf::from(command.as_std().get_program());
     let path = path_for(&program);
@@ -48,6 +102,7 @@ pub fn spawn(command: &mut Command) -> std::io::Result<Group> {
 }
 
 /// Whether `program`, or the Node it would run on, is a snap's.
+#[cfg(unix)]
 fn from_snap(program: &std::path::Path, path: Option<&std::ffi::OsStr>) -> bool {
     let snap = |path: &std::path::Path| {
         std::fs::canonicalize(path)
@@ -77,9 +132,21 @@ impl Drop for Group {
     /// Kills the helper and everything it started.
     fn drop(&mut self) {
         // Its group, led by it: the node workers or servers an AI CLI starts go with it.
+        #[cfg(unix)]
         if let Some(pid) = self.0.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
             // SAFETY: killpg only reads its plain integer arguments.
             unsafe { libc::killpg(pid, libc::SIGKILL) };
+        }
+        // Its tree: Windows has no process groups to signal. By full path, never one found on the PATH.
+        #[cfg(windows)]
+        if let Some(pid) = self.0.id() {
+            let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+            let taskkill = std::path::Path::new(&system).join("System32\\taskkill.exe");
+            let _ = std::process::Command::new(taskkill)
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
         }
     }
 }
@@ -178,6 +245,16 @@ impl<R: AsyncRead + Unpin> Events<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_the_script_behind_npms_launcher() {
+        let launcher = "@ECHO off\r\nSET dp0=%~dp0\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n";
+        assert_eq!(
+            script_in(launcher).as_deref(),
+            Some("node_modules\\@anthropic-ai\\claude-code\\cli.js")
+        );
+        assert_eq!(script_in("@ECHO off"), None);
+    }
 
     #[tokio::test]
     async fn skips_lines_that_cannot_matter() {

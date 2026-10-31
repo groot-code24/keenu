@@ -418,15 +418,15 @@ fn read_json(path: &std::path::Path) -> Value {
         .unwrap_or_default()
 }
 
-/// Claude's plan as its sign-in says and Claude Code names it ("Team", "Max"); empty without one.
+/// Claude's plan as Claude Code names it ("Team", "Max"), from its account file; empty without one. Its
+/// sign-in file is never read: that is Claude Code's alone.
 pub fn claude_plan() -> String {
-    let credentials = read_json(&super::claude::config_dir().join(".credentials.json"));
     let state = read_json(&super::claude::state_file());
-    claude_plan_of(&credentials["claudeAiOauth"], &state["oauthAccount"])
+    claude_plan_of(&state["oauthAccount"])
 }
 
-/// The plan of a sign-in (`claudeAiOauth`) and its account (`oauthAccount` in `.claude.json`).
-fn claude_plan_of(sign_in: &Value, account: &Value) -> String {
+/// The plan of an account (`oauthAccount` in `.claude.json`).
+fn claude_plan_of(account: &Value) -> String {
     let named = ["plan_display_name", "planDisplayName"]
         .iter()
         .find_map(|key| {
@@ -438,12 +438,9 @@ fn claude_plan_of(sign_in: &Value, account: &Value) -> String {
         return name.to_owned();
     }
     let text = |value: &Value| value.as_str().unwrap_or_default().to_lowercase();
-    let mut kind = text(&sign_in["subscriptionType"]);
-    if kind.is_empty() {
-        kind = text(&account["organizationType"])
-            .trim_start_matches("claude_")
-            .to_owned();
-    }
+    let kind = text(&account["organizationType"])
+        .trim_start_matches("claude_")
+        .to_owned();
     // As Claude Code names them ("Claude Team"): no seat or usage tier.
     match kind.as_str() {
         "" => String::new(),
@@ -461,8 +458,7 @@ fn read_claude() -> Catalog {
     let plan = if super::claude::uses_api_key() {
         "API key".to_owned()
     } else {
-        let credentials = read_json(&super::claude::config_dir().join(".credentials.json"));
-        match claude_plan_of(&credentials["claudeAiOauth"], &state["oauthAccount"]) {
+        match claude_plan_of(&state["oauthAccount"]) {
             plan if plan.is_empty() => "API key".to_owned(),
             plan => plan,
         }
@@ -789,24 +785,16 @@ mod tests {
 
     #[test]
     fn names_claudes_plans_as_the_account_has_them() {
-        let plan = |kind: &str, tier: &str, account: Value| {
-            claude_plan_of(
-                &json!({"subscriptionType": kind, "rateLimitTier": tier}),
-                &account,
-            )
-        };
-        assert_eq!(plan("pro", "default_claude_pro", Value::Null), "Pro");
+        let plan = |kind: &str| claude_plan_of(&json!({"organizationType": kind}));
+        assert_eq!(plan("claude_pro"), "Pro");
         // Claude Code says "Claude Max" and "Claude Team" whatever the usage tier or seat.
-        assert_eq!(plan("max", "default_claude_max_20x", Value::Null), "Max");
-        let team = json!({"seatTier": "team_tier_1", "organizationType": "claude_team"});
-        assert_eq!(plan("team", "default_claude_max_5x", team), "Team");
-        assert_eq!(plan("enterprise", "", Value::Null), "Enterprise");
-        // The account's own words win; without a sign-in's word, its organization's kind.
+        assert_eq!(plan("claude_max"), "Max");
+        assert_eq!(plan("claude_team"), "Team");
+        assert_eq!(plan("claude_enterprise"), "Enterprise");
+        assert_eq!(claude_plan_of(&Value::Null), "");
+        // The account's own words win.
         let named = json!({"organization": {"plan_display_name": "Team Plus"}});
-        assert_eq!(plan("team", "", named), "Team Plus");
-        let only_account = json!({"organizationType": "claude_team"});
-        assert_eq!(plan("", "", only_account), "Team");
-        assert_eq!(plan("", "", Value::Null), "");
+        assert_eq!(claude_plan_of(&named), "Team Plus");
     }
 
     #[test]

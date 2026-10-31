@@ -13,7 +13,7 @@ use anyhow::{Context, bail};
 use chrono::{DateTime, Local, NaiveDate};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::answer::{Answer, SCHEMA};
@@ -119,7 +119,7 @@ impl Drop for Alive {
 
 /// Codex's home for Keenu, under Keenu's data folder; it shares only the user's sign-in.
 fn home() -> PathBuf {
-    crate::store::data_dir().join("codex")
+    keenu_core::paths::data_dir().join("codex")
 }
 
 impl Codex {
@@ -140,7 +140,7 @@ impl Codex {
         // "" is Codex's own default: the user's own model was weighed before (see `Session::choice`), so one
         // it refused is never put back here.
         let model = model.to_owned();
-        let mut command = Command::new(program);
+        let mut command = super::child::command(program);
         command
             .args(["app-server", "-c", "sandbox_mode=\"read-only\""])
             .env("CODEX_HOME", home())
@@ -196,7 +196,7 @@ impl Codex {
     /// The account (`account/read`) and each page of the models its plan allows (`model/list`), from a
     /// server of its own that is dropped after: nothing is asked of the AI.
     pub async fn models(program: &Path) -> anyhow::Result<(Value, Vec<Value>)> {
-        let workspace = crate::store::data_dir().join("assistant");
+        let workspace = keenu_core::paths::data_dir().join("assistant");
         let mut codex = Self::start(program, "", None, &workspace, "").await?;
         let account = codex.request("account/read", json!({})).await;
         let account = account.map_err(|err| codex.explained(err))?;
@@ -596,7 +596,7 @@ pub fn user_auth() -> PathBuf {
 
 /// The top-level `model` in the user's config.toml, which Keenu uses too unless told otherwise. None with a
 /// provider of their own (Azure, Ollama…): OpenAI's service, which Keenu's Codex uses, would not know it.
-pub(super) fn user_model() -> Option<String> {
+pub fn user_model() -> Option<String> {
     let config = std::fs::read_to_string(user_home().join("config.toml")).ok()?;
     if config
         .lines()

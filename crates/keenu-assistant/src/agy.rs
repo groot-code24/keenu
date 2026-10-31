@@ -14,7 +14,7 @@ use chrono::{DateTime, Local, NaiveDate};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::answer::{Answer, SCHEMA};
@@ -27,7 +27,7 @@ const HOOKS: &str = r#"{"keenu-guard": {"PreToolUse": [{"matcher": "*", "hooks":
 
 /// agy's own home: Keenu's conversations stay apart from the user's own agy and are cleared each day.
 pub fn home() -> PathBuf {
-    crate::store::data_dir().join("agy")
+    keenu_core::paths::data_dir().join("agy")
 }
 
 /// Where agy keeps its conversations, under `home()`.
@@ -62,7 +62,7 @@ pub async fn models(program: &Path) -> anyhow::Result<String> {
         link_login(user, &home());
     }
     std::fs::create_dir_all(home())?;
-    let mut command = Command::new(program);
+    let mut command = super::child::command(program);
     command
         .arg("models")
         .current_dir(home())
@@ -189,7 +189,7 @@ pub struct Agy {
 
 impl Agy {
     /// Starts agy in its own home with Keenu's hook in `workspace`, resuming `resume` if given.
-    pub(super) fn start_program(
+    pub fn start_program(
         program: &Path,
         model: &str,
         resume: Option<&str>,
@@ -201,7 +201,7 @@ impl Agy {
         let agents = workspace.join(".agents");
         std::fs::create_dir_all(&agents)?;
         std::fs::write(agents.join("hooks.json"), HOOKS).context("could not write agy's hooks")?;
-        let mut command = Command::new(program);
+        let mut command = super::child::command(program);
         command
             .args(["--print=", "--input-format", "stream-json"])
             .args(["--output-format", "stream-json", "--disable-slash-commands"])
@@ -386,6 +386,7 @@ mod tests {
 
     /// agy signed out prints its reason and quits before reading the request; the island must say
     /// to sign in, not that agy stopped.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_signed_out_agy_asks_to_sign_in() {
         let root = std::env::temp_dir().join(format!("keenu-signed-out-{}", std::process::id()));

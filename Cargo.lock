@@ -1318,6 +1318,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "keenu-assistant"
+version = "2.0.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "keenu-core",
+ "keenu-guard",
+ "keenu-security",
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "keenu-core"
 version = "2.0.0-alpha.1"
 dependencies = [
@@ -1337,7 +1355,9 @@ dependencies = [
  "futures-util",
  "image",
  "inotify",
+ "keenu-assistant",
  "keenu-core",
+ "keenu-guard",
  "keenu-integrations",
  "libc",
  "log",
@@ -1347,6 +1367,16 @@ dependencies = [
  "toml_edit",
  "ureq",
  "zbus",
+]
+
+[[package]]
+name = "keenu-guard"
+version = "2.0.0-alpha.1"
+dependencies = [
+ "chrono",
+ "keenu-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

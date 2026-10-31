@@ -14,7 +14,7 @@ use chrono::{DateTime, Local, NaiveDate};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::answer::{Answer, SCHEMA};
@@ -43,7 +43,7 @@ impl Claude {
         instructions: &str,
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(workspace)?;
-        let mut command = Command::new(program);
+        let mut command = super::child::command(program);
         command
             .args([
                 "-p",
@@ -61,7 +61,7 @@ impl Claude {
             .args(["--setting-sources", "", "--strict-mcp-config"])
             .args(["--system-prompt", instructions, "--json-schema", SCHEMA]);
         // A file only the user can read: on the command line, any user could read an API key in it.
-        let sign_in = crate::store::data_dir().join("claude-sign-in.json");
+        let sign_in = keenu_core::paths::data_dir().join("claude-sign-in.json");
         match sign_in_settings() {
             Some(json) => {
                 write_sign_in(&sign_in, &json).context("could not hand Claude its sign-in")?;
@@ -253,13 +253,13 @@ fn sign_in_settings() -> Option<String> {
 /// Writes `json` to `path` made anew, so it is the user's alone whatever an older file was.
 fn write_sign_in(path: &Path, json: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
-        crate::store::create_private_dir(dir)?;
+        crate::private::create_private_dir(dir)?;
     }
     match std::fs::remove_file(path) {
         Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err),
         _ => {}
     }
-    crate::store::write_private(path, json.as_bytes())
+    crate::private::write_private(path, json.as_bytes())
 }
 
 const SIGN_IN_KEYS: &[&str] = &[
@@ -309,7 +309,7 @@ pub fn state_file() -> PathBuf {
 
 /// Where Claude Code keeps the conversations it had in Keenu's workspace (and only those).
 fn store() -> Option<PathBuf> {
-    let workspace = crate::store::data_dir().join("assistant");
+    let workspace = keenu_core::paths::data_dir().join("assistant");
     // Claude Code names a project's folder after its path, every character but letters and digits a dash.
     let name: String = workspace
         .to_string_lossy()
@@ -360,6 +360,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn its_sign_in_is_the_users_alone() {
         use std::os::unix::fs::PermissionsExt;
@@ -405,7 +406,7 @@ mod tests {
         let dir = store().unwrap();
         assert!(dir.starts_with(dirs::home_dir().unwrap().join(".claude/projects")));
         // Named after Keenu's own workspace, wherever its data folder is (XDG_DATA_HOME moves it).
-        let workspace = crate::store::data_dir().join("assistant");
+        let workspace = keenu_core::paths::data_dir().join("assistant");
         assert!(
             dir.to_string_lossy()
                 .ends_with(&*workspace.to_string_lossy().replace(['/', '.'], "-")),
