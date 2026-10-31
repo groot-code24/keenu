@@ -1,8 +1,54 @@
 # Installing Keenu
 
+Keenu is an alpha: [what works where](platform-support.md) says what has been tested on each system. Everything
+installs for your user only, with no administrator rights and nothing to compile.
+
+You can download a package for your system from the
+[releases page](https://github.com/groot-code24/keenu/releases), or use one command, which finds the right build, checks
+its checksum, installs it and starts it.
+
+## Windows
+
+In PowerShell (Windows 10 version 2004 or newer, x64):
+
+```powershell
+irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1 | iex
+```
+
+To remove it, keeping your data:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.ps1))) -Uninstall
+```
+
+The installers are not code signed yet, so if you download the `.msi` or `-setup.exe` in a browser, SmartScreen may say
+it is from an unknown publisher: choose **More info**, then **Run anyway**, if you trust this page.
+
+## macOS
+
+In Terminal (macOS 11 or newer, Apple silicon or Intel):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh
+```
+
+To remove it, keeping your data:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/install/install.sh | sh -s -- --uninstall
+```
+
+The app is not notarized by Apple yet. If you download the `.dmg` in a browser, drag Keenu to Applications, try to open it
+once, then allow it in **System Settings > Privacy & Security**. Choose the `arm64` file for Apple silicon and `x64` for
+an Intel Mac; **About This Mac** says which you have.
+
+On macOS, Keenu does not have clipboard history or coding agent approvals yet.
+
+## Linux
+
 Three steps and an optional fourth: about a minute, no root and nothing to compile.
 
-## 1. Check your desktop
+### 1. Check your desktop
 
 Keenu runs on **GNOME Shell 46 to 51** on a 64-bit Intel or AMD PC. Check
 in a terminal:
@@ -12,7 +58,8 @@ gnome-shell --version   # GNOME Shell 46.x up to 51.x
 uname -m                # x86_64
 ```
 
-Each of these was installed with the command below and checked:
+These have a supported GNOME Shell. Keenu's own automated install tests run on Ubuntu 24.04, Debian 13 and Fedora 43,
+each with a GNOME Shell that has no real display:
 
 | GNOME Shell | Ubuntu | Fedora Workstation | Debian |
 |---|---|---|---|
@@ -25,11 +72,10 @@ Each of these was installed with the command below and checked:
 
 Other systems with one of these GNOME Shell versions work the same way.
 Other desktops (KDE Plasma, Cinnamon, XFCE, COSMIC, …) cannot load GNOME
-Shell extensions, so Keenu does not run there; nor does it run on ARM
-computers (Raspberry Pi and other ARM machines), for which there are no ready-built
-programs.
+Shell extensions, so Keenu does not run there. Arm64 builds are published, but only the x64 ones have been installed
+and tested.
 
-## 2. Install
+### 2. Install
 
 Paste this into a terminal and press Enter:
 
@@ -38,13 +84,13 @@ curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/ins
 ```
 
 It downloads the latest release, checks its checksum and installs it for
-your user. It ends with `==> Keenu 1.x.y is installed` and what to do next:
-log out and back in, and how to check or remove Keenu. Run it as yourself,
+your user. It ends with `==> Keenu <version> is installed` and what to do next:
+log out and back in, and how to remove Keenu. Run it as yourself,
 **without sudo**: everything goes in your own home folder, and it refuses to
 run as root. On a GNOME Shell version Keenu was not made for it stops before
 changing anything.
 
-## 3. Log out and back in
+### 3. Log out and back in
 
 GNOME Shell on Wayland only loads a new extension at login, so log out and
 back in once. (On GNOME 46 to 48 with an X11 session you can instead press
@@ -53,7 +99,7 @@ Alt+F2, type `r` and press Enter.)
 The island now sits in the middle of the top bar, in place of the clock.
 Rest the pointer on it to open it.
 
-## 4. The voice assistant (optional)
+### 4. The voice assistant (optional)
 
 Everything else works without it. To ask the island things out loud with
 Super+I:
@@ -115,7 +161,7 @@ curl -fsSL https://raw.githubusercontent.com/groot-code24/keenu/main/scripts/ins
 ```
 
 **Installed from a package?** Update it the way you installed it: download
-the new `.deb` or `.rpm` from [Releases](https://github.com/groot-code24/keenu/releases/latest)
+the new `.deb` or `.rpm` from [Releases](https://github.com/groot-code24/keenu/releases)
 and open it, or on Arch run `git pull` and `makepkg -si` again in
 `packaging/aur`. Then log out and back in. Don't also run the command above: it would add a second copy (see
 [below](#both-a-package-and-the-one-line-install)).

@@ -35,8 +35,10 @@ settings. See [the move to Keenu](docs/branding-migration.md).
 - App usage on Windows, with sessions, categories, retention, CSV export and deletion.
 - First-run screens, and settings for all of it. Everything that watches, listens or reaches out starts off.
 - Secure updates: a signed manifest, SHA-256, and Authenticode with a pinned signer.
-- One-command installers, an MSI and a setup program for Windows, a download page, and a manifest behind all of them.
-- A macOS host that **compiles but has never been run**, with limited features.
+- One-command installers that also start Keenu, an MSI and a setup program for Windows, a download page, and a signed
+  manifest behind all of them.
+- A macOS host with limited features: no clipboard history and no agent approvals yet. Its automated tests, install and
+  start have run on GitHub's Macs; **nobody has used it on a real Mac yet**.
 
 ### Changed
 

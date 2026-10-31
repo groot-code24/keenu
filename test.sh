@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Runs Keenu's tests on Linux or macOS, and says plainly what ran, what passed and what was skipped.
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 # shellcheck source=scripts/common.sh
 . scripts/common.sh
 

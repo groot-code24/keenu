@@ -1,31 +1,26 @@
 # Release engineering
 
-How a Keenu release is made, and what has to be set up first. **No release has been published yet.** Parts marked
-_rehearsed_ have run for real on one machine; the workflows have not yet run on GitHub.
+How a Keenu release is made, and what it needs. The repository is
+[groot-code24/keenu](https://github.com/groot-code24/keenu), and releases are published on its GitHub releases page.
 
 ## Setting up (once)
 
-Keenu does not assume who publishes it. Nothing below is invented in the source; each is a placeholder until you
-provide it.
+Most of this has working defaults, set in the workflows. These are the repository settings a release reads:
 
 | Where | What | Needed for |
 |---|---|---|
-| Replace `YOUR-GITHUB-OWNER` across the repository | The GitHub owner | Links, `gh attestation verify` |
-| Replace `YOUR-KEENU-DOMAIN` in `website/` and `scripts/install/` | Where the page and scripts are served | One-command install |
-| `vars.KEENU_RELEASE_BASE_URL` | Where files are downloaded from: `https://<host>/releases`, one folder per `v<version>` | The manifest |
-| `vars.KEENU_UPDATE_MANIFEST_URL` | Address of `keenu-release.json` | The updater, install scripts |
-| `vars.KEENU_UPDATE_PUBLIC_KEY`, `secrets.KEENU_UPDATE_SECRET_KEY` | From `keenu-release keygen` | Signed manifests. **Releases refuse to run without these** |
-| `vars.KEENU_PUBLISHER` | Your legal name, as on your certificate | MSI manufacturer |
-| `secrets.KEENU_SIGNING_CERT_BASE64`, `KEENU_SIGNING_CERT_PASSWORD`, `vars.KEENU_SIGNING_THUMBPRINT` | A code-signing certificate (PFX) | Windows signing, and the updater |
+| `secrets.KEENU_UPDATE_SECRET_KEY` | The secret half of `keenu-release keygen`. The public half is in `scripts/install/install.sh` and the workflows | Signed manifests. **Releases refuse to run without it** |
+| `vars.KEENU_PUBLISHER` | Your legal name, as on your certificate | MSI manufacturer. "Keenu contributors" until set |
+| `secrets.KEENU_SIGNING_CERT_BASE64`, `KEENU_SIGNING_CERT_PASSWORD`, `vars.KEENU_SIGNING_THUMBPRINT` | A code-signing certificate (PFX) | Windows signing, and the updater. **Not set: installers are unsigned** |
 | `vars.KEENU_REQUIRE_SIGNING = true` | | Refuses a stable release that would be unsigned |
-| `vars.KEENU_BUNDLE_ID` | Your reverse-domain identifier | macOS |
+| `vars.KEENU_BUNDLE_ID` | Another macOS identifier | `io.github.groot-code24.keenu` until set |
 | `KEENU_SIGNING_IDENTITY`, `KEENU_NOTARY_PROFILE` | Developer ID and a notarization profile | macOS signing. **Not yet wired into the workflow** |
 | `vars.KEENU_GOOGLE_CLIENT_ID`, `..._SECRET`, `vars.KEENU_MICROSOFT_CLIENT_ID` | See [calendar setup](calendar-setup.md) | Google and Microsoft sign-in |
-| `vars.KEENU_RELEASE_REPOSITORY` at build time | `owner/name` | Linux's "a new version is out" |
-| `MAINTAINER` in `scripts/package-system.sh` through `KEENU_MAINTAINER`, and `packaging/aur/PKGBUILD` | Your name and address | Linux packages |
+| `vars.KEENU_MAINTAINER` | Your name and address | Linux packages. GitHub's no-reply address until set |
 
-Keep the update secret key offline if you can, and use a protected GitHub Environment for the publish job. To rotate
-a key, ship a release signed with the old one that holds the new one.
+Keep a private backup of the update secret key: every later release must be signed with it. Use a protected GitHub
+Environment for the publish job if others can push. To rotate a key, ship a release signed with the old one that holds
+the new one.
 
 ## Making a release
 
@@ -38,29 +33,34 @@ a key, ship a release signed with the old one that holds the new one.
 
 [release.yml](../.github/workflows/release.yml) then, in order:
 
-1. Checks the tag against `Cargo.toml`, `metadata.json` and the changelog, and that the settings are there.
+1. Checks the tag against `Cargo.toml`, `metadata.json` and the changelog, and that the signing key is there.
 2. Runs [windows.yml](../.github/workflows/windows.yml), [linux.yml](../.github/workflows/linux.yml) and
    [macos.yml](../.github/workflows/macos.yml), including real installs. Any failure stops everything.
 3. Signs the Windows packages, if a certificate is set. Without one they stay unsigned, and the manifest and notes say so.
 4. Makes the manifest from the files actually present, with their real checksums. It can only list what exists.
 5. Signs the manifest and verifies that signature with the public key.
-6. Fills the addresses into the install scripts.
-7. Attests provenance, and creates the GitHub release.
+6. Attests provenance, and creates the GitHub release.
+7. Commits the signed manifest to `website/` on `main`, where the website and the install scripts read it. Only now can
+   anyone be offered this release, so a list never names a file that is not there.
+8. Runs [verify-release.yml](../.github/workflows/verify-release.yml): downloads every published file and compares it,
+   then runs the real one-command installers on clean Windows, macOS and Linux machines. Run it by hand from the Actions
+   tab at any time.
 
-Tags with a suffix (`v2.0.0-rc.1`) become prereleases, and go on the prerelease channel.
+Tags with a suffix (`v2.0.0-rc.1`) become prereleases. The installers and the website offer the newest stable release,
+or the newest prerelease while there is no stable one.
 
 ## What gets published
 
 | File | From | Notes |
 |---|---|---|
-| `Keenu-<v>-windows-x64.msi` | `scripts/windows/package.sh` (wixl) | Per-user, no admin. _Rehearsed_ |
-| `Keenu-<v>-windows-x64-setup.exe` | The same (NSIS) | Per-user, `/S` for silent. _Rehearsed_ |
-| `Keenu-<v>-windows-x64-portable.zip` | The same | _Rehearsed_ |
-| `keenu-<v>-linux-{x64,arm64}.tar.gz`, `.deb`, `.rpm` | `scripts/package.sh`, `scripts/package-system.sh` | _Rehearsed_ on x64, without Vulkan: it needs more memory than was available |
-| `Keenu-<v>-macos-{arm64,x64}.dmg` | `packaging/macos/build-app.sh` | Never run. Not notarized until set up |
-| `keenu-release.json`, `.sig` | `keenu-release` | The manifest. _Rehearsed_ |
+| `Keenu-<v>-windows-x64.msi` | `scripts/windows/package.sh` (wixl) | Per-user, no admin. Tested in CI |
+| `Keenu-<v>-windows-x64-setup.exe` | The same (NSIS) | Per-user, `/S` for silent. Tested in CI |
+| `Keenu-<v>-windows-x64-portable.zip` | The same | |
+| `keenu-<v>-linux-{x64,arm64}.tar.gz`, `.deb`, `.rpm` | `scripts/package.sh`, `scripts/package-system.sh` | Built, installed and tested in CI |
+| `Keenu-<v>-macos-{arm64,x64}.dmg` | `packaging/macos/build-app.sh` | Installed and started in CI. Not notarized until set up |
+| `keenu-release.json`, `.sig` | `keenu-release` | The manifest, also on `main` in `website/` |
 | `SHA256SUMS` | `keenu-release checksums` | |
-| `install.sh`, `install.ps1` | `scripts/install/` | _Rehearsed against a server on this computer_ |
+| `install.sh`, `install.ps1` | `scripts/install/` | Also on `main`, and on the website |
 
 **Not offered:** an AppImage, because on Linux Keenu is a GNOME Shell extension, which has to be installed into your
 home folder or the system, and an AppImage cannot do that. A signed `.pkg` for macOS, until there is a notarized `.dmg`.
@@ -97,11 +97,17 @@ Keep older releases in it with `--merge`, so nobody on the prerelease channel is
 
 ## The website
 
-`website/` is static, with no build step. Serve it next to `keenu-release.json`. It reads the manifest, recommends a
-file for the visitor's system, and lists the rest with checksums and signing status. With no manifest it says nothing
-is published yet: it cannot offer a file that does not exist.
+`website/` is static. [vercel.json](../vercel.json) deploys it on Vercel: import the repository at
+[vercel.com/new](https://vercel.com/new), keep the settings it finds and the repository root, and deploy. Every push to
+`main` then deploys again, including the commit that adds a release's manifest, so the page follows releases by itself.
 
-Replace `YOUR-KEENU-DOMAIN` and `YOUR-GITHUB-OWNER` in `index.html` first.
+[scripts/build-website.sh](../scripts/build-website.sh) puts the install scripts beside the page, so on your site they
+are `https://<site>/install.sh` and `/install.ps1`, and the page shows those addresses. The same scripts also work from
+GitHub with no site at all, and their release list comes from GitHub either way.
+
+The page reads the manifest, recommends a file for the visitor's system, offers one for each system, and lists all of
+them with checksums and signing status. With no manifest it says nothing is published yet: it cannot offer a file that
+does not exist.
 
 ## Reproducing the builds
 
