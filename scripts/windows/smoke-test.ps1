@@ -288,7 +288,7 @@ public static class KeenuTestClipboard {
         try {
             EmptyClipboard();
             Put(13, Encoding.Unicode.GetBytes(text + "\0"));
-            if (marker != null) Put(RegisterClipboardFormatW(marker), value);
+            if (!string.IsNullOrEmpty(marker)) Put(RegisterClipboardFormatW(marker), value);
         } finally { CloseClipboard(); }
     }
 }
