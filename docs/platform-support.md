@@ -15,16 +15,15 @@ This page says what has actually been tested, on what. A feature is not listed a
 
 | System | Status | What has been run |
 |---|---|---|
-| Windows 11, x64 | **Alpha: tested** | Windows 11 build 26300 at 150%, one display, built with mingw-w64 through Docker |
+| Windows 11, x64 | **Alpha: tested** | Windows 11 build 26300 at 150%, one display, built with mingw-w64 through Docker. The release's MSVC build: its tests, smoke test, installers and one-command install on GitHub's Windows Server |
 | Windows 10 2004+, x64 | Declared, **not tested** | Same APIs; needs a run |
-| Windows 11, ARM64 | **Compiles** in CI only | Nothing |
-| Linux, GNOME 46–51, x64 | **Alpha**: logic tested, packages built | Tests in Debian containers. Test packages installed in containers with a headless GNOME Shell 48.7 and 49.10: see the matrix. Not yet used on a real desktop since the rename |
-| Linux, GNOME 46–51, ARM64 | CI only | Nothing |
+| Windows 11, ARM64 | **Compiles** in CI only: no download | Nothing |
+| Linux, GNOME 46–51, x64 | **Alpha**: logic tested, packages installed | The release's packages and one-command install, in containers with a headless GNOME Shell on Ubuntu 24.04, Debian 13 and Fedora 43. Not yet used on a real desktop since the rename |
+| Linux, GNOME 46–51, ARM64 | Built and tested in CI: **never installed** | Its unit tests on GitHub's arm64 runner |
 | Linux, KDE Plasma and others | **No island yet** | `keenud` starts anywhere with a session bus, but the only UI is a GNOME Shell extension |
-| macOS 11+, Apple Silicon and Intel | **Compiles: never run on a Mac** | Type-checked and linted for both architectures, from Windows. Not linked |
+| macOS 11+, Apple Silicon and Intel | **Starts: nobody has used it** | On GitHub's macOS 15 machines, both architectures: unit tests, build, disk image, one-command install, stays running, removal. No person has seen the island on a Mac. Older than macOS 15 has not run |
 
-MSVC is what official Windows releases will use, and it has not been run here: the machine used for testing has no
-Visual Studio, so this was built with mingw-w64. CI builds with MSVC.
+Official Windows releases are built with MSVC by CI. The real desktop runs above used a mingw-w64 build of the same code.
 
 ## Features
 
@@ -53,7 +52,7 @@ Visual Studio, so this was built with mingw-w64. CI builds with MSVC.
 | App usage | Tested as far as the record; real foreground reading tested | Existing | Compiles |
 | Updates: manifest, checksum, signature logic | Tested | Notice only | Compiles |
 | Updates: installing one | **Blocked** on a code-signing certificate | Not supported: use the package manager or `install.sh` | Not yet |
-| Installer: install, upgrade, remove | **Tested**: MSI, setup, ZIP, one-command | Tarball, .deb, .rpm: see the matrix | Compiles |
+| Installer: install, upgrade, remove | **Tested**: MSI, setup, ZIP, one-command | Tarball, .deb, .rpm, one-command: see the matrix | DMG, one-command: **tested** by CI |
 | Tray or menu bar | Tested as far as surviving Explorer's restart message | Not applicable | Compiles |
 | One instance | Tested | Existing | Not yet |
 | Sleep, resume, lock | Tested by simulated messages | Existing | Not yet |
@@ -75,12 +74,12 @@ Visual Studio, so this was built with mingw-w64. CI builds with MSVC.
 
 ## Known gaps
 
+- On Windows, `keenu` is a windowed program, so a terminal does not wait for it and its output can appear after the
+  prompt. To capture it, pipe it: `keenu --version | Out-String`.
 - Windows ships no automatic recovery if Direct2D cannot start, beyond saying so.
 - Rich text and images on the clipboard have had unit tests but no run with a real app.
 - With clipboard history on, the Windows island reads each copy on its window's thread. An app that copies with delayed
   rendering and then stops responding can stall the island until Windows gives up on that app.
-- The Linux packages tested had speech on the processor only: the build with the graphics card needs more memory than
-  the test machine's Docker had, so it has not finished. A release's packages have not been built yet.
 - `keenu-macos` does not reach the agents' pipe, so agents ask in their terminals there.
 - `Reminder` and task pages exist only on Linux; elsewhere they are reachable through the command line, and reminders
   still notify.

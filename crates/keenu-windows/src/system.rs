@@ -314,7 +314,15 @@ pub struct Updates;
 
 /// The publisher's certificate thumbprint, fixed when this build was made.
 pub const fn pinned_thumbprint() -> Option<&'static str> {
-    option_env!("KEENU_SIGNING_THUMBPRINT")
+    non_empty(option_env!("KEENU_SIGNING_THUMBPRINT"))
+}
+
+/// A build setting left empty, as a workflow passes one that is not set, is not set.
+const fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
+    match value {
+        Some(text) if !text.is_empty() => Some(text),
+        _ => None,
+    }
 }
 
 impl UpdateProvider for Updates {
@@ -458,6 +466,13 @@ mod tests {
     fn with_nothing_pinned_nothing_can_be_installed() {
         let result = verify_against(Path::new("C:\\Windows\\explorer.exe"), None);
         assert!(result.unwrap_err().contains("No publisher certificate"));
+    }
+
+    #[test]
+    fn a_setting_left_empty_pins_nothing() {
+        assert_eq!(non_empty(Some("")), None);
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some("ab")), Some("ab"));
     }
 
     #[test]

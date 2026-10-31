@@ -14,9 +14,9 @@ you right there, in a small island at the top of your screen.
 
 </div>
 
-> **Status: alpha.** Keenu is usable on Windows and on Linux with GNOME, and has not had a stable release. macOS
-> support compiles but **has never been run on a Mac**. [What works where](docs/platform-support.md) says exactly
-> what has and has not been tested, on what.
+> **Status: alpha.** Keenu is usable on Windows and on Linux with GNOME, and has not had a stable release. On macOS it
+> installs and starts on test machines, with fewer features, but **no person has used it there yet**. Downloads are not
+> code signed yet. [What works where](docs/platform-support.md) says exactly what has and has not been tested, on what.
 
 ## What it does
 

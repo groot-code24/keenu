@@ -6,6 +6,11 @@ All notable changes to Keenu, called Neeru and Isle in earlier versions, are lis
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, a build without a publisher certificate no longer says updates are available. 2.0.0-alpha.1 says so, and
+  refuses any update it finds: update it with the install command instead.
+
 ## [2.0.0-alpha.1] - 2026-10-31
 
 The project is now called **Keenu**, and is no longer only for GNOME. This is an alpha: see
@@ -17,6 +22,12 @@ The project is now called **Keenu**, and is no longer only for GNOME. This is an
 Run the new package's `install.sh`. It removes `isled` and its service. On first start `keenud` copies your data from
 `~/.local/share/isle` to `~/.local/share/keenu`, leaving the old folder as it was. The extension keeps its id and your
 settings. See [the move to Keenu](docs/branding-migration.md).
+
+### Known problems
+
+- Downloads are not code signed, and the macOS app is not notarized: your system may warn you.
+- With update checks turned on, Windows may offer a newer version and then refuse to install it, as it is not signed.
+  Nothing unverified is installed. Run the install command again to update.
 
 ### Added
 

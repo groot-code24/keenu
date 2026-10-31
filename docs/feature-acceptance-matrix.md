@@ -16,12 +16,13 @@ integration.
 | L1 | Debian 13 container (`rust:1-trixie`) | x64 | None | Logic tests only |
 | L2 | Debian 13 container | x64 | Headless GNOME Shell 48.7, 1280x720 virtual display | No systemd, no real session |
 | L3 | Fedora 43 container | x64 | Headless GNOME Shell 49.10, 1280x720 virtual display | No systemd, no real session |
-| M1 | None: no Mac was available | | | Type-checked and linted on W1 for the macOS targets; never linked or run |
-| CI | GitHub-hosted runners | Various | Various | **Workflows have not run yet**: the repository has no remote |
+| M1 | GitHub's hosted Macs: macOS 15, Apple silicon and Intel | arm64, x64 | A hosted session, no person | Built, tests run, installed and started. Nobody has used it on a Mac |
+| CI | GitHub-hosted runners: Windows Server with MSVC, Ubuntu 24.04 x64 and arm64, macOS | Various | Each one's own, one display, no microphone | All workflows run on [groot-code24/keenu](https://github.com/groot-code24/keenu/actions) |
 
 ## How current each result is
 
-Testing found bugs late, so not every result is from the very last code. In the final code:
+Since these rows were written on W1, GitHub's runners have run the release's own tests, and the installs below, on the code
+released as 2.0.0-alpha.1: see Release automation. The rest of this section is about the runs on W1:
 
 - **Run on it:** all of W1's unit tests, smoke test, installer test and real CalDAV server; formatting; clippy on Windows,
   Linux and macOS; the Linux tarball on L2; the one-command installer on L2.
@@ -169,7 +170,7 @@ deleted; incremental reports removed: true
 | UP-1 | W1, L1 | | Good, changed, forged, unsigned and unsafe manifests | Only the good one is accepted | Passed | `updater::tests`, `release::tests` | PASS |
 | UP-2 | W1, L1 | Mock server | Download good, tampered, oversized, insecure | Only the good one keeps its name | Passed | `updater::tests` | PASS |
 | UP-3 | W1 | An unsigned file | `WinVerifyTrust`, thumbprint | Refused | Refused | `system::tests` | PASS |
-| UP-4 | W1 | Build without settings | `availability`; `--capabilities` | Says it cannot update | As expected | `system::tests` | PASS |
+| UP-4 | W1 | Build without settings | `availability`; `--capabilities` | Says it cannot update | As expected. **The published 2.0.0-alpha.1 says "available"**, as CI passes an empty setting: fixed since, for the next release. It still refuses every update | `system::tests` | PASS |
 | UP-5 | | A code-signing certificate | Real update from an older MSI; restart; wrong signer refused | | | | BLOCKED |
 | UP-6 | | Developer ID | macOS | Not implemented | | | NOT SUPPORTED |
 
@@ -204,32 +205,40 @@ deleted; incremental reports removed: true
 | IN-9 | W1 | | No address; insecure address; missing list | Clear error, nothing changed | As expected | `installer_test.py` | PASS |
 | IN-10 | | | Portable ZIP through `install.ps1` | | Tested only as a listed file; MSI is preferred | | NOT RUN |
 | IN-10a | L2 | Server in the container | `scripts/install/install.sh`: as root, no address, insecure address, missing list, prerelease not asked for, changed package; install, again, `--uninstall` | Refused with a reason; installed, checksum verified; data kept; removed | 20 of 20, after fixing a real bug: `--uninstall` could not find the command | Run output | PASS |
-| IN-11 | | A real domain | `irm ... \| iex`, as people will | | | | BLOCKED |
+| IN-11 | CI | The published release, clean Windows runner | `irm ... \| iex` from GitHub, as people will; started; removed | Installed, running after 8 s, removed | As expected | [verify-release.yml](../.github/workflows/verify-release.yml) | PASS |
+| IN-11a | CI | The published release, clean Macs, Intel and Apple silicon | `curl ... \| sh` from GitHub; started; removed | Installed, running after 10 s, removed | See RE-5 for each | verify-release.yml | PASS |
+| IN-11b | CI | The published release: Ubuntu 24.04, Debian 13, Fedora 43, headless GNOME Shell | `curl ... \| sh` from GitHub, then GNOME Shell | Extension active, no JS errors, `keenud` on the bus | As expected | verify-release.yml | PASS |
+| IN-11c | | The Vercel site deployed | The same commands from the site's own address | | Not deployed yet: that is the owner's step | | NOT RUN |
+| IN-11d | W1 | The published release, a real desktop with nothing installed | The Windows command from GitHub; started; removed | Installed, Start Menu entry, responsive window called Keenu; removed, data kept, the agents' real settings unchanged | As expected | Run output | PASS |
 | IN-12 | | Several antivirus products | Installers and scripts | Not flagged | One product blocked a PowerShell test script; `install.ps1` ran | [Notes](release-engineering.md#testing-a-package-by-hand) | NOT RUN |
 
 ## Website
 
 | ID | Env | Preconditions | Steps | Expected | Actual | Evidence | Status |
 |---|---|---|---|---|---|---|---|
-| WE-1 | W1 | Node 24 | `choose.test.js`: detection, recommendation, nothing for this system, only `https://` links | Hold | 6 of 6 | `tests/website` | PASS |
-| WE-2 | | A browser and a manifest | Load the page | | | | NOT RUN |
+| WE-1 | W1, CI | Node | `choose.test.js`: detection, recommendation, nothing for this system, one file per system, only `https://` links, install commands | Hold | 9 of 9 | `tests/website` | PASS |
+| WE-2 | W1 | Edge, headless, a sample manifest, the headers from `vercel.json` served locally | Load the page at desktop and phone width | Buttons for each system, no script blocked, no sideways scrolling at 360 px | As expected | Run output | PASS |
+| WE-3 | | Vercel | Deploy, then load the page and fetch `/install.sh`, `/install.ps1` | | Not deployed yet. `vercel.json` checked against Vercel's published schema only | | NOT RUN |
 
 ## Release automation
 
 | ID | Env | Preconditions | Steps | Expected | Actual | Evidence | Status |
 |---|---|---|---|---|---|---|---|
 | RE-1 | W1, L1 | | `keenu-release` tests: lists only what exists, real checksums, signing as stated | Hold | Passed | `keenu-release` tests | PASS |
-| RE-1a | W1 | | The workflows and PowerShell scripts parse; shellcheck on the shell scripts | Clean | Clean. **Parsing only: no workflow has run** | Run output | PASS |
-| RE-2 | CI | A repository on GitHub | Each workflow | | No remote yet | | BLOCKED |
-| RE-3 | CI | A test tag | A full release, stopped by a failure, and completed | | | | BLOCKED |
+| RE-1a | CI | | The workflows run; PowerShell scripts parse; shellcheck | Clean | Clean | [Actions](https://github.com/groot-code24/keenu/actions) | PASS |
+| RE-2 | CI | | Every workflow: CI, Windows (MSVC, smoke test, installers), Linux x64 and arm64 with Vulkan, macOS on both, Security | Pass | All pass | Actions | PASS |
+| RE-3 | CI | A tag | A full release, stopped by a failure, and completed | Stopped: nothing published. Completed: published | Stopped three times by the checks: twice for a missing key, once by a failing test, then published as [v2.0.0-alpha.1](https://github.com/groot-code24/keenu/releases/tag/v2.0.0-alpha.1) | Actions | PASS |
+| RE-4 | CI | The published release | Each file in the list downloaded and compared; the list's signature checked against the key in `install.sh` | All match | All match | verify-release.yml | PASS |
+| RE-5 | CI | The published release | The one-command jobs in verify-release.yml, on all five machines | All pass | All pass, Apple silicon on macOS 15 | verify-release.yml | PASS |
 
 ## macOS
 
 | ID | Env | Preconditions | Steps | Expected | Actual | Evidence | Status |
 |---|---|---|---|---|---|---|---|
-| MC-1 | M1 | | `cargo clippy --target aarch64-apple-darwin` and `x86_64-apple-darwin`, `-D warnings` | Type-checks, no warnings | Both clean, after fixing the 2 errors its first check found. **Not linked, not run** | Run output | PASS |
-| MC-2 | | A Mac | Starts, island, menu bar, every feature, permissions, Spaces, fullscreen, sleep, Retina | | No Mac | | NOT RUN |
-| MC-3 | | A Mac | `build-app.sh`, DMG | | No Mac | | NOT RUN |
+| MC-1 | M1 | | Clippy with `-D warnings`, tests of the shared crates, and a release build, on each architecture | Pass | Pass | [macos.yml](../.github/workflows/macos.yml) | PASS |
+| MC-2 | | A person with a Mac | The island as seen, menu bar, every feature, permissions, Spaces, fullscreen, sleep, Retina | | Nobody has looked at it | | NOT RUN |
+| MC-2a | M1 | | Started by the installer | Still running after 10 s | As expected. Says nothing of what it looks like | macos.yml, verify-release.yml | PASS |
+| MC-3 | M1 | | `build-app.sh`, DMG, `codesign --verify`, `plutil -lint` | Well formed; ad hoc signature | As expected | macos.yml | PASS |
 | MC-4 | | Developer ID | Sign and notarize | | | | BLOCKED |
 
 ## Linux
@@ -244,5 +253,6 @@ deleted; incremental reports removed: true
 | LX-3c | L3 | A test build: see LX-6 | `.rpm`, then GNOME Shell | As LX-3a | As expected, **on the build before the last fixes** | `scripts/ci/smoke-test.sh` | PASS |
 | LX-4 | | A real GNOME desktop | Everything in the [Linux guide](linux.md), since the rename | | | | NOT RUN |
 | LX-5 | | Ubuntu, a real Fedora desktop, KDE, X11 | | | KDE and others have no island | | NOT RUN |
-| LX-6 | | At least 4 GB for Docker or the build | `scripts/package.sh` as it is, with speech on the graphics card | Builds | whisper.cpp's Vulkan shaders ran out of memory in 3.5 GB, with optimisation lowered too. The packages above were therefore built with `keenu-whisper --no-default-features`, on the processor only, from a scratch copy. **The packages a release would publish have not been built** | Build log | BLOCKED |
-| LX-7 | L1 | | `cargo deny check` | Passes | Licences, bans and sources passed. Advisories failed on `quick-xml`, since upgraded to a fixed version. **Not run again since** | Build log | NOT RUN |
+| LX-6 | CI | | `scripts/package.sh` as it is, with speech on the graphics card, on x64 and arm64 | Builds | Built; these are the published packages. Only x64's are installed by a test | [linux.yml](../.github/workflows/linux.yml) | PASS |
+| LX-6a | CI | | Tarball on Ubuntu 24.04, `.deb` on Ubuntu 24.04 and Debian 13, `.rpm` on Fedora 43, one-command on Debian 13, headless GNOME Shell | As LX-3a | As expected, on the release's own build | linux.yml | PASS |
+| LX-7 | CI | | `cargo deny check`: advisories, bans, licences, sources; `npm audit`; a scan for secrets | Passes | Pass, since upgrading `quick-xml` | [security.yml](../.github/workflows/security.yml) | PASS |

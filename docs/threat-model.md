@@ -80,4 +80,6 @@ Testing against real systems, not mocks, found:
 | Real install | `install.ps1 -Uninstall` said "removed" with Keenu still there | Finds the MSI's product, and checks the result |
 | Renaming, reading before changing | The extension's command allow-list would have refused every approved command | Both sides renamed together, with tests |
 | The audit | The Windows edition checked for updates in the upstream author's repository | The repository must be set explicitly, or nothing is looked up |
-| Reading what the rename touched | The extension's Update button ran a script fetched from `github.com/YOUR-GITHUB-OWNER`: a placeholder anyone could register, then running their code on users' computers | Fails closed until a release fills in the real name; a release refuses to publish a package with the placeholder |
+| Reading what the rename touched | The extension's Update button ran a script fetched from `github.com/YOUR-GITHUB-OWNER`: a placeholder anyone could register, then running their code on users' computers | The real repository is now in the source, and a release refuses to publish a package with a placeholder |
+| A clean GitHub runner | Start at login failed, and could not be turned on, on a profile with no Run key | Creates the key when turning it on; no key means off |
+| Reading the published program's own report | A workflow's empty setting made a build with no certificate say updates were available. It still refused them: an empty pin matches no signer | An empty setting counts as not set. **Fixed after 2.0.0-alpha.1** |
