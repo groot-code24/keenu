@@ -364,7 +364,7 @@ $form.Controls.AddRange(@($note, $secret, $button))
         # The assistant's system actions, as it sends them. Start-Process quotes nothing, so the argument is quoted here.
         function Invoke-KeenuSystem($json) { Invoke-Keenu @('--system', ('"' + ($json -replace '"', '\"') + '"')) }
         $placed = Invoke-KeenuSystem '{"type":"window","command":"left","window":"KeenuControlTest"}'
-        $form32 = [KeenuSmoke]::FindWindowW($null, 'KeenuControlTest')
+        $form32 = [KeenuSmoke]::FindWindowW([NullString]::Value, 'KeenuControlTest')
         $rect = New-Object KeenuSmoke+RECT
         [void][KeenuSmoke]::GetWindowRect($form32, [ref]$rect)
         Check 'a window is put on the left half' ($placed.Code -eq 0 -and $rect.left -lt 50 -and ($rect.right - $rect.left) -gt 300) "$($placed.Out) $($placed.Err) $($rect.left),$($rect.right)"
