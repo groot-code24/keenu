@@ -85,6 +85,11 @@ pub enum Setting {
     Notifications,
     ClaudeHooks,
     CodexHooks,
+    Assistant,
+    AssistantAskAll,
+    AssistantSpeak,
+    AssistantWakeWord,
+    AssistantMemory,
 }
 
 /// Text the user can type, one at a time.
@@ -98,6 +103,18 @@ pub enum Field {
     VoiceEndpoint,
     VoiceApiKey,
     UsageCategory,
+    AssistantRequest,
+    AssistantApiBase,
+    AssistantApiModel,
+    AssistantApiKey,
+    XaiKey,
+    MemoryAdd,
+    MemoryImport,
+    ProjectName,
+    Briefing,
+    ConnectorName,
+    ConnectorTarget,
+    ConnectorToken,
 }
 
 impl Field {
@@ -111,12 +128,33 @@ impl Field {
             Self::VoiceEndpoint => "OpenAI-compatible address (https://.../v1)",
             Self::VoiceApiKey => "API key (kept in Credential Manager)",
             Self::UsageCategory => "Category for this app",
+            Self::AssistantRequest => "Ask Keenu, or start with research for a report",
+            Self::AssistantApiBase => {
+                "openai, anthropic, xai, ollama, or an address (https://.../v1)"
+            }
+            Self::AssistantApiModel => "Model name",
+            Self::AssistantApiKey => "API key (kept in the system's credential store)",
+            Self::XaiKey => "xAI API key for live search (kept in the credential store)",
+            Self::MemoryAdd => "Something to remember",
+            Self::MemoryImport => "File to bring in: a text file, or ChatGPT's conversations.json",
+            Self::ProjectName => "Project name, then its notes after a colon; empty for none",
+            Self::Briefing => "Briefing time, such as 7:30; empty for none",
+            Self::ConnectorName => "Connector's name",
+            Self::ConnectorTarget => "Its address (https://...), or the command that starts it",
+            Self::ConnectorToken => "Its token, if it needs one (kept in the credential store)",
         }
     }
 
     /// Shown as dots.
     pub fn secret(self) -> bool {
-        matches!(self, Self::CalDavPassword | Self::VoiceApiKey)
+        matches!(
+            self,
+            Self::CalDavPassword
+                | Self::VoiceApiKey
+                | Self::AssistantApiKey
+                | Self::XaiKey
+                | Self::ConnectorToken
+        )
     }
 }
 
@@ -168,6 +206,16 @@ pub enum Action {
     ConfirmDeleteAllData,
     ResetSettings,
     OpenDataFolder,
+    AssistantStop,
+    NextAssistantRoute,
+    ConnectChatGpt,
+    DisconnectChatGpt,
+    NextAssistantTone,
+    NextProject,
+    ForgetMemory,
+    OpenActionLog,
+    NextConnectorAccess(usize),
+    RemoveConnector(usize),
     OnboardingNext,
     OnboardingSkip,
     SelectMonitor,
@@ -254,6 +302,8 @@ pub struct ApprovalView {
     pub cwd: String,
     pub permissions: Vec<String>,
     pub seconds_left: u32,
+    /// Keenu's own assistant asks: there is no terminal to leave it to.
+    pub own: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,6 +325,12 @@ pub struct VoiceView {
     pub answer: String,
     pub error: String,
     pub engine: String,
+    /// The assistant is on, so what is said or typed goes to it.
+    pub assistant: bool,
+    /// What it is doing now, newest last.
+    pub steps: Vec<String>,
+    /// Which AI answers.
+    pub route: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +352,15 @@ pub struct SettingsView {
     pub update_available: bool,
     pub monitor: String,
     pub confirming_delete: bool,
+    /// The assistant's rows: words, and the buttons beside them.
+    pub assistant_rows: Vec<ButtonRow>,
+}
+
+/// A row of Settings with words and buttons, drawn as the other rows are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ButtonRow {
+    pub text: String,
+    pub buttons: Vec<(String, Action)>,
 }
 
 /// A line of typing in progress.
@@ -1113,7 +1178,24 @@ fn shelf_page(frame: &mut Frame, view: &View, body: Rect) {
 
 fn voice_page(frame: &mut Frame, view: &View, body: Rect) {
     let voice = &view.voice;
-    if !voice.enabled {
+    if voice.assistant {
+        // The same pills and lines as the rest of the page, for typing and for stopping.
+        frame.pill(
+            Rect::new(body.x, body.y, 96.0, 28.0),
+            "Type",
+            false,
+            Action::StartInput(Field::AssistantRequest),
+        );
+        if voice.busy {
+            frame.pill(
+                Rect::new(body.x + 104.0, body.y, 72.0, 28.0),
+                "Stop",
+                false,
+                Action::AssistantStop,
+            );
+        }
+    }
+    if !voice.enabled && !voice.assistant {
         frame.note(
             Rect::new(body.x, body.y + 30.0, body.w, 40.0),
             "Voice is off. Turn it on in Settings. The microphone only ever opens while you are recording.",
@@ -1124,6 +1206,10 @@ fn voice_page(frame: &mut Frame, view: &View, body: Rect) {
             true,
             Action::SelectPage(Page::Settings),
         );
+        return;
+    }
+    if !voice.enabled {
+        voice_output(frame, voice, body, body.y + 38.0);
         return;
     }
     frame.pill(
@@ -1185,7 +1271,12 @@ fn voice_page(frame: &mut Frame, view: &View, body: Rect) {
         },
     );
     frame.hit(mic, Action::NextMicrophone, "Use the next microphone");
-    let mut y = mic.bottom() + 4.0;
+    voice_output(frame, voice, body, mic.bottom() + 4.0);
+}
+
+/// What was said, what the assistant is doing, and its answer, in the page's own text styles.
+fn voice_output(frame: &mut Frame, voice: &VoiceView, body: Rect, top: f32) {
+    let mut y = top;
     if !voice.error.is_empty() {
         frame.text(
             Rect::new(body.x, y, body.w, 34.0),
@@ -1204,6 +1295,14 @@ fn voice_page(frame: &mut Frame, view: &View, body: Rect) {
             style(12.0, MUTED),
         );
         y += 20.0;
+    }
+    for step in &voice.steps {
+        frame.text(
+            Rect::new(body.x, y, body.w, 16.0),
+            step.as_str(),
+            style(11.0, FAINT),
+        );
+        y += 16.0;
     }
     if !voice.answer.is_empty() {
         frame.text(
@@ -1314,7 +1413,7 @@ fn usage_page(frame: &mut Frame, view: &View, body: Rect) {
 
 /// How many rows the settings page has, for scrolling.
 pub fn settings_rows(view: &View) -> usize {
-    view.settings.switches.len() + 4
+    view.settings.switches.len() + view.settings.assistant_rows.len() + 4
 }
 
 fn settings_page(frame: &mut Frame, view: &View, body: Rect) {
@@ -1330,6 +1429,20 @@ fn settings_page(frame: &mut Frame, view: &View, body: Rect) {
     for switch in &settings.switches {
         if visible(row_h, &mut y) {
             frame.switch(switch, y, body.w);
+            y += row_h;
+        }
+    }
+    for row in &settings.assistant_rows {
+        if visible(row_h, &mut y) {
+            let mut right = body.right();
+            for (label, action) in row.buttons.iter().rev() {
+                right = frame.pill_from_right(right, y, label, false, action.clone());
+            }
+            frame.text(
+                Rect::new(body.x, y + 6.0, right - body.x - 8.0, 18.0),
+                row.text.as_str(),
+                style(13.0, TEXT),
+            );
             y += row_h;
         }
     }
@@ -1443,12 +1556,14 @@ fn approval_page(frame: &mut Frame, approval: &ApprovalView) {
         );
         y += 18.0;
     }
-    frame.text(
-        Rect::new(x, y, width, 16.0),
-        format!("In {}", approval.cwd),
-        style(11.0, MUTED),
-    );
-    y += 18.0;
+    if !approval.cwd.is_empty() {
+        frame.text(
+            Rect::new(x, y, width, 16.0),
+            format!("In {}", approval.cwd),
+            style(11.0, MUTED),
+        );
+        y += 18.0;
+    }
     if !approval.permissions.is_empty() {
         frame.text(
             Rect::new(x, y, width, 16.0),
@@ -1462,13 +1577,15 @@ fn approval_page(frame: &mut Frame, approval: &ApprovalView) {
     let buttons_y = EXPANDED_H - 48.0;
     let mut right = EXPANDED_W - PAD;
     // Allow is not first in reading order: Tab and Enter reach Deny before it.
-    right = frame.pill_from_right(
-        right,
-        buttons_y,
-        "Ask in terminal",
-        false,
-        Action::ApprovalInTerminal(approval.id.clone()),
-    );
+    if !approval.own {
+        right = frame.pill_from_right(
+            right,
+            buttons_y,
+            "Ask in terminal",
+            false,
+            Action::ApprovalInTerminal(approval.id.clone()),
+        );
+    }
     right = frame.pill_from_right(
         right,
         buttons_y,
@@ -1592,6 +1709,7 @@ mod tests {
             cwd: "D:\\code\\korus".into(),
             permissions: vec![],
             seconds_left: 300,
+            own: false,
         }
     }
 

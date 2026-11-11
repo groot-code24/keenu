@@ -168,8 +168,10 @@ mod tests {
     #[test]
     fn never_writes_a_secret_down() {
         let log = scratch("secret");
-        log.add(&entry("Run: curl -H 'Authorization: Bearer abc.def' https://x"))
-            .unwrap();
+        log.add(&entry(
+            "Run: curl -H 'Authorization: Bearer abc.def' https://x",
+        ))
+        .unwrap();
         let text = fs::read_to_string(log.path()).unwrap();
         assert!(!text.contains("abc.def"), "{text}");
     }
@@ -202,7 +204,11 @@ mod tests {
         // Its folder is a file.
         let dir = std::env::temp_dir().join(format!("keenu-guard-{}-file", std::process::id()));
         fs::write(&dir, "x").unwrap();
-        assert!(ActionLog::new(dir.join("actions.log")).add(&entry("a")).is_err());
+        assert!(
+            ActionLog::new(dir.join("actions.log"))
+                .add(&entry("a"))
+                .is_err()
+        );
         fs::remove_file(dir).unwrap();
     }
 }

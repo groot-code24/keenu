@@ -39,11 +39,11 @@ jobs:
       - name: Lint
         if: ${{ !matrix.build_only }}
         shell: bash
-        run: scripts/ci/logged.sh cargo clippy --locked -p keenu-windows --all-targets -- -D warnings
+        run: scripts/ci/logged.sh cargo clippy --locked -p keenu-windows -p keenu-assistant -p keenu-app --all-targets -- -D warnings
       - name: Test against real Windows APIs
         if: ${{ !matrix.build_only }}
         shell: bash
-        run: scripts/ci/logged.sh cargo test --locked -p keenu-windows -p keenu-app -p keenu-security
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-windows -p keenu-app -p keenu-security -p keenu-assistant -p keenu-guard -p keenu-platform
       - name: Build
         env:
           KEENU_SIGNING_THUMBPRINT: ${{ vars.KEENU_SIGNING_THUMBPRINT }}

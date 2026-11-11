@@ -161,6 +161,21 @@ pub trait VoiceProvider: Send + Sync {
     fn listen_local(&self) -> Result<String>;
     /// Says `text` with the system's voice.
     fn speak_local(&self, text: &str) -> Result<()>;
+    /// Stops what `speak_local` is saying, so the user can talk over it.
+    fn stop_speaking(&self) {}
+    /// Listens on this computer until `phrase` is heard (`true`) or `stop` is set (`false`). The microphone is open for
+    /// as long as this runs, so it runs only while the user has asked for it.
+    fn wait_for_phrase(
+        &self,
+        _phrase: &str,
+        _stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<bool> {
+        Err("Listening for a wake word is not available on this system yet.".into())
+    }
+    /// Whether `wait_for_phrase` can work here.
+    fn hears_phrases(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,4 +222,173 @@ pub trait UpdateProvider: Send + Sync {
     fn verify_platform_signature(&self, file: &Path) -> Result<()>;
     /// Installs it and restarts Keenu.
     fn install(&self, file: &Path) -> Result<()>;
+}
+
+/// An open window.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowInfo {
+    /// What the system calls it, good until it closes.
+    pub id: String,
+    pub app: String,
+    pub title: String,
+    pub focused: bool,
+}
+
+/// One control in a window, as the system's accessibility interface reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UiElement {
+    pub role: String,
+    pub name: String,
+    /// What it holds; always empty for a password field.
+    pub value: String,
+    pub enabled: bool,
+    /// A password field: Keenu neither reads it nor types into it.
+    pub secret: bool,
+}
+
+/// Said when an action reaches a password field. Providers check this themselves, so it holds whatever the field is
+/// called and whatever the AI asks.
+pub const SECRET_FIELD: &str = "That is a password field, so Keenu leaves it to you. Type it yourself, then tell Keenu to go on.";
+
+/// Using other apps, through the system's accessibility interface.
+pub trait AppControlProvider: Send + Sync {
+    fn availability(&self) -> Availability;
+    fn windows(&self) -> Result<Vec<WindowInfo>>;
+    /// The controls of the window whose id or title holds `window`; the one in front when it is empty.
+    fn read_window(&self, window: &str, limit: usize) -> Result<Vec<UiElement>>;
+    fn focus_window(&self, window: &str) -> Result<()>;
+    /// Asks the window to close, as its close button does, so it can ask to save.
+    fn close_window(&self, window: &str) -> Result<()>;
+    /// Presses the control called `target`. What it did, in words.
+    fn click(&self, window: &str, target: &str) -> Result<String>;
+    /// Puts `text` in the field called `target`; the field with focus when `target` is empty.
+    fn set_text(&self, window: &str, target: &str, text: &str) -> Result<String>;
+    /// Presses keys such as `ctrl+s` or `enter` in the window.
+    fn press_keys(&self, window: &str, keys: &str) -> Result<()>;
+    /// Starts an installed app by name.
+    fn open_app(&self, name: &str) -> Result<String>;
+    /// Installed apps whose name holds one of `terms`.
+    fn find_apps(&self, terms: &[String]) -> Result<Vec<String>>;
+    /// Opens a file, folder or address with what the system uses for it.
+    fn open_path(&self, target: &str) -> Result<()>;
+}
+
+/// A key combination as people write it: `ctrl+shift+s`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyCombo {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    /// The Windows key, or Command on a Mac.
+    pub meta: bool,
+    /// The key itself, in lower case: `s`, `enter`, `f5`.
+    pub key: String,
+}
+
+impl KeyCombo {
+    /// `None` when it names no key, or more than one.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut combo = Self {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            meta: false,
+            key: String::new(),
+        };
+        for part in text.split('+').map(|part| part.trim().to_lowercase()) {
+            match part.as_str() {
+                "ctrl" | "control" => combo.ctrl = true,
+                "shift" => combo.shift = true,
+                "alt" | "option" => combo.alt = true,
+                "win" | "windows" | "cmd" | "command" | "meta" | "super" => combo.meta = true,
+                "" => return None,
+                key if combo.key.is_empty() => combo.key = key.to_owned(),
+                _ => return None,
+            }
+        }
+        (!combo.key.is_empty()).then_some(combo)
+    }
+}
+
+/// `text` holds `part`, in any case; an empty `part` holds for everything.
+pub fn holds(text: &str, part: &str) -> bool {
+    text.to_lowercase().contains(&part.trim().to_lowercase())
+}
+
+/// Which control is meant by `target`: the one named exactly, else the only one whose name holds it. Several that could
+/// be meant is an error, so a request that is not clear is never guessed at.
+pub fn pick_element<'a>(
+    elements: &'a [UiElement],
+    target: &str,
+    what: &str,
+) -> Result<&'a UiElement> {
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(format!("Say which {what}."));
+    }
+    let lower = target.to_lowercase();
+    if let Some(exact) = elements.iter().find(|e| e.name.to_lowercase() == lower) {
+        return Ok(exact);
+    }
+    let close: Vec<&UiElement> = elements.iter().filter(|e| holds(&e.name, target)).collect();
+    match close.as_slice() {
+        [] => Err(format!("No {what} called “{target}” is in that window.")),
+        [only] => Ok(only),
+        several => {
+            let names: Vec<&str> = several.iter().take(6).map(|e| e.name.as_str()).collect();
+            Err(format!(
+                "More than one {what} could be “{target}”: {}. Say which.",
+                names.join(", ")
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn element(name: &str) -> UiElement {
+        UiElement {
+            name: name.to_owned(),
+            ..UiElement::default()
+        }
+    }
+
+    #[test]
+    fn reads_key_combinations() {
+        let combo = KeyCombo::parse("Ctrl+Shift+S").unwrap();
+        assert!(combo.ctrl && combo.shift && !combo.alt && !combo.meta);
+        assert_eq!(combo.key, "s");
+        assert_eq!(KeyCombo::parse("enter").unwrap().key, "enter");
+        assert!(KeyCombo::parse("cmd+q").unwrap().meta);
+        assert_eq!(KeyCombo::parse("ctrl+"), None);
+        assert_eq!(KeyCombo::parse("ctrl"), None);
+        assert_eq!(KeyCombo::parse("a+b"), None);
+    }
+
+    #[test]
+    fn a_control_is_found_only_when_it_is_clear_which() {
+        let elements = [element("Save"), element("Save as"), element("Open")];
+        assert_eq!(
+            pick_element(&elements, "save", "button").unwrap().name,
+            "Save"
+        );
+        assert_eq!(
+            pick_element(&elements, "ope", "button").unwrap().name,
+            "Open"
+        );
+        let both = [element("Save as"), element("Save all")];
+        assert!(
+            pick_element(&both, "save", "button")
+                .unwrap_err()
+                .contains("More than one")
+        );
+        assert!(
+            pick_element(&elements, "print", "button")
+                .unwrap_err()
+                .contains("No button")
+        );
+        assert!(pick_element(&elements, " ", "button").is_err());
+    }
 }

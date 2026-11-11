@@ -8,10 +8,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use keenu_platform::{
-    AudioDevice, Availability, ClipboardContent, ClipboardProvider, FileShelfProvider,
-    MediaCommand, MediaProvider, MediaSession, Monitor, MonitorProvider, NativeNotification,
-    NotificationProvider, PlaybackState, Recording, Result, UpdateProvider, UsageProvider,
-    VoiceProvider, WindowLifecycleProvider,
+    AppControlProvider, AudioDevice, Availability, ClipboardContent, ClipboardProvider,
+    FileShelfProvider, KeyCombo, MediaCommand, MediaProvider, MediaSession, Monitor,
+    MonitorProvider, NativeNotification, NotificationProvider, PlaybackState, Recording, Result,
+    SECRET_FIELD, UiElement, UpdateProvider, UsageProvider, VoiceProvider, WindowInfo,
+    WindowLifecycleProvider, holds, pick_element,
 };
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSScreen, NSWorkspace};
@@ -249,18 +250,35 @@ impl VoiceProvider for Voice {
         Err("Speech recognition is not implemented on macOS yet.".into())
     }
     fn speak_local(&self, text: &str) -> Result<()> {
-        let status = Command::new("/usr/bin/say")
+        let child = Command::new("/usr/bin/say")
             .arg("--")
             .arg(text)
-            .status()
+            .spawn()
             .map_err(|err| format!("Could not run say: {err}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err("macOS could not speak.".into())
+        let id = child.id();
+        SPEAKING.store(id, std::sync::atomic::Ordering::Relaxed);
+        let mut child = child;
+        let status = child
+            .wait()
+            .map_err(|err| format!("Could not run say: {err}"));
+        SPEAKING.store(0, std::sync::atomic::Ordering::Relaxed);
+        // Stopped by the user, it ends on a signal: nothing went wrong.
+        match status? {
+            status if status.success() || status.code().is_none() => Ok(()),
+            _ => Err("macOS could not speak.".into()),
+        }
+    }
+
+    fn stop_speaking(&self) {
+        let id = SPEAKING.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if id != 0 {
+            let _ = Command::new("/bin/kill").arg(id.to_string()).status();
         }
     }
 }
+
+/// The `say` under way, so it can be stopped; 0 for none.
+static SPEAKING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub struct Displays;
 
@@ -331,5 +349,340 @@ impl UpdateProvider for Updates {
     }
     fn install(&self, _file: &Path) -> Result<()> {
         Err("Updating in place is not implemented on macOS yet.".into())
+    }
+}
+
+/// Using other apps, through System Events: macOS's accessibility interface as it is open to scripts. It needs the user's
+/// permission in System Settings > Privacy & Security > Accessibility, which macOS asks for the first time.
+pub struct AppControl;
+
+/// The window a script should work on, in AppleScript: by the app it is in, or what is in front.
+fn app_clause(window: &str) -> Result<String> {
+    let window = window.trim();
+    if window.is_empty() {
+        return Ok("first application process whose frontmost is true".to_owned());
+    }
+    let found = AppControl.windows()?;
+    let apps: Vec<&WindowInfo> = found
+        .iter()
+        .filter(|w| holds(&w.title, window) || holds(&w.app, window))
+        .collect();
+    match apps.first() {
+        Some(info) => Ok(format!("application process {}", quoted(&info.app))),
+        None => Err(format!("No window called “{window}” is open.")),
+    }
+}
+
+/// `tell System Events`, explaining the one failure people can fix.
+fn system_events(script: &str) -> Result<String> {
+    osascript(&format!(
+        "tell application \"System Events\"\n{script}\nend tell"
+    ))
+    .map_err(|why| {
+        if why.contains("not allowed") || why.contains("1002") || why.contains("-1719") {
+            "Keenu needs permission: System Settings > Privacy & Security > Accessibility."
+                .to_owned()
+        } else {
+            why
+        }
+    })
+}
+
+/// Fields between windows, lines and controls in what the scripts below print.
+const FIELD: &str = "\u{1f}";
+const RECORD: &str = "\u{1e}";
+
+/// The controls of a window as records. A secure field's value is never asked for: AppleScript gets its role first.
+fn read_controls(window: &str, limit: usize) -> Result<Vec<UiElement>> {
+    let clause = app_clause(window)?;
+    let script = format!(
+        r#"set out to ""
+set fieldMark to (ASCII character 31)
+set recordMark to (ASCII character 30)
+tell {clause}
+  set found to entire contents of front window
+  set counted to 0
+  repeat with item_ in found
+    if counted is greater than or equal to {limit} then exit repeat
+    try
+      set r to role of item_
+      set n to ""
+      try
+        set n to name of item_ as text
+      end try
+      if n is "missing value" or n is "" then
+        try
+          set n to description of item_ as text
+        end try
+      end if
+      set v to ""
+      if r is not "AXSecureTextField" then
+        try
+          set v to value of item_ as text
+        end try
+      end if
+      set e to "true"
+      try
+        set e to enabled of item_ as text
+      end try
+      set out to out & r & fieldMark & n & fieldMark & v & fieldMark & e & recordMark
+      set counted to counted + 1
+    end try
+  end repeat
+end tell
+return out"#
+    );
+    let text = system_events(&script)?;
+    Ok(parse_controls(&text))
+}
+
+fn parse_controls(text: &str) -> Vec<UiElement> {
+    text.split(RECORD)
+        .filter_map(|record| {
+            let mut parts = record.split(FIELD);
+            let role = parts.next()?.trim();
+            if role.is_empty() {
+                return None;
+            }
+            let name = parts.next().unwrap_or_default();
+            let value = parts.next().unwrap_or_default();
+            let enabled = parts.next().unwrap_or("true").trim() != "false";
+            let secret = role == "AXSecureTextField";
+            let shown = |text: &str| {
+                if text == "missing value" {
+                    String::new()
+                } else {
+                    text.to_owned()
+                }
+            };
+            let name = shown(name);
+            let value = if secret { String::new() } else { shown(value) };
+            if name.is_empty()
+                && value.is_empty()
+                && !matches!(role, "AXTextField" | "AXTextArea" | "AXSecureTextField")
+            {
+                return None;
+            }
+            Some(UiElement {
+                role: role.trim_start_matches("AX").to_lowercase(),
+                name,
+                value,
+                enabled,
+                secret,
+            })
+        })
+        .collect()
+}
+
+/// AppleScript's key code for a named key.
+fn key_code(key: &str) -> Option<u32> {
+    Some(match key {
+        "enter" | "return" => 36,
+        "tab" => 48,
+        "space" => 49,
+        "backspace" | "delete" => 51,
+        "esc" | "escape" => 53,
+        "left" => 123,
+        "right" => 124,
+        "down" => 125,
+        "up" => 126,
+        "home" => 115,
+        "end" => 119,
+        "pageup" => 116,
+        "pagedown" => 121,
+        _ => return None,
+    })
+}
+
+impl AppControlProvider for AppControl {
+    fn availability(&self) -> Availability {
+        match system_events("return name of first application process whose frontmost is true") {
+            Ok(_) => Availability::Available,
+            Err(why) => Availability::NeedsPermission(why),
+        }
+    }
+
+    fn windows(&self) -> Result<Vec<WindowInfo>> {
+        let script = r#"set out to ""
+set fieldMark to (ASCII character 31)
+set recordMark to (ASCII character 30)
+repeat with p in (application processes whose background only is false)
+  set appName to name of p
+  set isFront to frontmost of p as text
+  repeat with w in windows of p
+    set out to out & appName & fieldMark & (name of w as text) & fieldMark & isFront & recordMark
+  end repeat
+end repeat
+return out"#;
+        let text = system_events(script)?;
+        Ok(text
+            .split(RECORD)
+            .filter_map(|record| {
+                let mut parts = record.split(FIELD);
+                let app = parts.next()?.trim().to_owned();
+                if app.is_empty() {
+                    return None;
+                }
+                let title = parts.next().unwrap_or_default().to_owned();
+                let focused = parts.next().unwrap_or_default().trim() == "true";
+                Some(WindowInfo {
+                    id: format!("{app}/{title}"),
+                    app,
+                    title,
+                    focused,
+                })
+            })
+            .collect())
+    }
+
+    fn read_window(&self, window: &str, limit: usize) -> Result<Vec<UiElement>> {
+        read_controls(window, limit)
+    }
+
+    fn focus_window(&self, window: &str) -> Result<()> {
+        let clause = app_clause(window)?;
+        system_events(&format!("set frontmost of {clause} to true")).map(drop)
+    }
+
+    fn close_window(&self, window: &str) -> Result<()> {
+        let clause = app_clause(window)?;
+        system_events(&format!("tell {clause} to click (first button of front window whose subrole is \"AXCloseButton\")")).map(drop)
+    }
+
+    fn click(&self, window: &str, target: &str) -> Result<String> {
+        let elements = read_controls(window, 2000)?;
+        let control = pick_element(&elements, target, "control")?;
+        if control.secret {
+            return Err(SECRET_FIELD.into());
+        }
+        if !control.enabled {
+            return Err(format!("“{}” is greyed out right now.", control.name));
+        }
+        let clause = app_clause(window)?;
+        system_events(&format!(
+            "tell {clause}\nrepeat with item_ in (entire contents of front window)\ntry\nif name of item_ is {} or description of item_ is {} then\nclick item_\nexit repeat\nend if\nend try\nend repeat\nend tell",
+            quoted(&control.name),
+            quoted(&control.name)
+        ))?;
+        Ok(format!("Pressed “{}”.", control.name))
+    }
+
+    fn set_text(&self, window: &str, target: &str, text: &str) -> Result<String> {
+        let elements = read_controls(window, 2000)?;
+        let fields: Vec<UiElement> = elements
+            .into_iter()
+            .filter(|e| {
+                e.secret || matches!(e.role.as_str(), "textfield" | "textarea" | "combobox")
+            })
+            .collect();
+        let control = if target.trim().is_empty() {
+            match fields.as_slice() {
+                [only] => only,
+                [] => return Err("That window has no field to type in.".into()),
+                _ => return Err("That window has several fields: say which.".into()),
+            }
+        } else {
+            pick_element(&fields, target, "field")?
+        };
+        if control.secret {
+            return Err(SECRET_FIELD.into());
+        }
+        let clause = app_clause(window)?;
+        system_events(&format!(
+            "tell {clause}\nrepeat with item_ in (entire contents of front window)\ntry\nif role of item_ is not \"AXSecureTextField\" and (name of item_ is {name} or description of item_ is {name}) then\nset value of item_ to {value}\nexit repeat\nend if\nend try\nend repeat\nend tell",
+            name = quoted(&control.name),
+            value = quoted(text)
+        ))?;
+        Ok(format!("Typed into “{}”.", control.name))
+    }
+
+    fn press_keys(&self, window: &str, keys: &str) -> Result<()> {
+        let combo =
+            KeyCombo::parse(keys).ok_or_else(|| format!("“{keys}” is not a key combination."))?;
+        if !window.trim().is_empty() {
+            self.focus_window(window)?;
+        }
+        let mut held = Vec::new();
+        for (on, name) in [
+            (combo.ctrl, "control down"),
+            (combo.shift, "shift down"),
+            (combo.alt, "option down"),
+            (combo.meta, "command down"),
+        ] {
+            if on {
+                held.push(name);
+            }
+        }
+        let using = if held.is_empty() {
+            String::new()
+        } else {
+            format!(" using {{{}}}", held.join(", "))
+        };
+        let press = match key_code(&combo.key) {
+            Some(code) => format!("key code {code}{using}"),
+            None if combo.key.chars().count() == 1 => {
+                format!("keystroke {}{using}", quoted(&combo.key))
+            }
+            None => return Err(format!("“{}” is not a key.", combo.key)),
+        };
+        system_events(&press).map(drop)
+    }
+
+    fn open_app(&self, name: &str) -> Result<String> {
+        if name.trim().is_empty() {
+            return Err("Say which app.".into());
+        }
+        let status = Command::new("/usr/bin/open")
+            .args(["-a", name])
+            .status()
+            .map_err(|err| format!("Could not run open: {err}"))?;
+        if status.success() {
+            Ok(format!("Opened {name}."))
+        } else {
+            Err(format!("No app called “{name}” was found."))
+        }
+    }
+
+    fn find_apps(&self, terms: &[String]) -> Result<Vec<String>> {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let mut names = Vec::new();
+        for folder in [
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            home.join("Applications"),
+        ] {
+            let Ok(entries) = std::fs::read_dir(folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(app) = name.strip_suffix(".app")
+                    && (terms.is_empty() || terms.iter().any(|term| holds(app, term)))
+                {
+                    names.push(app.to_owned());
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    fn open_path(&self, target: &str) -> Result<()> {
+        // `open` would read it as one of its options.
+        if target.starts_with('-') {
+            return Err("macOS could not open that.".into());
+        }
+        let status = Command::new("/usr/bin/open")
+            .arg(target)
+            .status()
+            .map_err(|err| format!("Could not run open: {err}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("macOS could not open that.".into())
+        }
     }
 }

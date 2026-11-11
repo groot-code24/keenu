@@ -59,6 +59,13 @@ With no command, starts the island (or shows the one already running).
   --calendar-import <file.ics> | --calendar-export <file.ics> | --calendar-list
   --caldav-test <url> <user> <password>   list a server's calendars and each calendar's events, without saving
   --agent-install | --agent-uninstall | --agent-status    hooks for Claude Code and Codex
+  --windows-list                the windows that are open
+  --window-read <title>         what is in a window, as the assistant sees it
+  --window-click <title> <name> press a control
+  --window-type <title> <name> <text>    put text in a field; never a password field
+  --window-keys <title> <keys>  press keys such as ctrl+s
+  --window-close <title>        ask a window to close
+  --assistant-log [count]       what the assistant did, newest first
   --export-data <file.json>     everything of yours except secrets
   --migration-status            what was brought over from an earlier version
   --migration-rollback          set Keenu's data folder aside so it is migrated again
@@ -179,6 +186,78 @@ fn dispatch(
             let lyrics = Lyrics::from_lrc_bytes(&bytes).ok_or("That file has no timed lyrics.")?;
             if let Some(line) = lyrics.active(position) {
                 println!("{}", lyrics.lines()[line].text);
+            }
+        }
+        "--windows-list" => {
+            for window in platform.control.windows()? {
+                println!(
+                    "{}\t{}\t{}{}",
+                    window.id,
+                    window.app,
+                    window.title,
+                    if window.focused { "\t(in front)" } else { "" }
+                );
+            }
+        }
+        "--window-read" => {
+            let title = required(args, 0, "--window-read <title>")?;
+            for element in platform.control.read_window(title, 500)? {
+                println!(
+                    "{}\t{}\t{}{}{}",
+                    element.role,
+                    element.name,
+                    element.value,
+                    if element.secret {
+                        "\t(password field)"
+                    } else {
+                        ""
+                    },
+                    if element.enabled {
+                        ""
+                    } else {
+                        "\t(greyed out)"
+                    }
+                );
+            }
+        }
+        "--window-click" => {
+            let usage = "--window-click <title> <name>";
+            let said = platform
+                .control
+                .click(required(args, 0, usage)?, required(args, 1, usage)?)?;
+            println!("{said}");
+        }
+        "--window-type" => {
+            let usage = "--window-type <title> <name> <text>";
+            let said = platform.control.set_text(
+                required(args, 0, usage)?,
+                required(args, 1, usage)?,
+                required(args, 2, usage)?,
+            )?;
+            println!("{said}");
+        }
+        "--window-keys" => {
+            let usage = "--window-keys <title> <keys>";
+            platform
+                .control
+                .press_keys(required(args, 0, usage)?, required(args, 1, usage)?)?;
+        }
+        "--window-close" => {
+            platform
+                .control
+                .close_window(required(args, 0, "--window-close <title>")?)?;
+        }
+        "--assistant-log" => {
+            let count = args
+                .first()
+                .and_then(|count| count.parse().ok())
+                .unwrap_or(30);
+            for entry in keenu_guard::ActionLog::new(paths.assistant_log()).newest(count) {
+                let at = DateTime::<Utc>::from_timestamp_millis(entry.at_ms).unwrap_or_default();
+                println!(
+                    "{at}\t{:?}\t{}\t{}",
+                    entry.outcome, entry.action, entry.detail
+                );
             }
         }
         "--clipboard" => match platform.clipboard.read()? {

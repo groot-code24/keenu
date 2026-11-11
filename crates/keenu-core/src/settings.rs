@@ -11,6 +11,33 @@ use serde::{Deserialize, Serialize};
 pub const FILE_NAME: &str = "settings.json";
 const SCHEMA: u32 = 1;
 
+/// The assistant. Off until turned on, and every part of it that listens or remembers has its own switch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AssistantSettings {
+    pub enabled: bool,
+    /// Which AI: "auto", "chatgpt", "claude", "codex", "grok" or "api"; empty means "auto".
+    pub route: String,
+    pub api_base: String,
+    pub api_model: String,
+    /// The model for live search; empty for the usual one.
+    pub search_model: String,
+    /// Ask before small, reversible actions too.
+    pub ask_for_everything: bool,
+    /// Read answers aloud.
+    pub speak: bool,
+    /// Listen for "Hey Keenu", on this computer. The microphone stays open while this is on.
+    pub wake_word: bool,
+    /// Remember what the user asks it to.
+    pub memory: bool,
+    /// "plain", "friendly", "formal" or "witty"; empty means plain.
+    pub tone: String,
+    /// The project this conversation is in; empty for none.
+    pub project: String,
+    /// When to give a morning briefing ("07:30"); empty for never.
+    pub briefing: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -26,6 +53,7 @@ pub struct Settings {
     pub window: WindowSettings,
     pub agents: AgentSettings,
     pub calendar: CalendarSettings,
+    pub assistant: AssistantSettings,
 }
 
 impl Default for Settings {
@@ -42,6 +70,7 @@ impl Default for Settings {
             window: WindowSettings::default(),
             agents: AgentSettings::default(),
             calendar: CalendarSettings::default(),
+            assistant: AssistantSettings::default(),
         }
     }
 }

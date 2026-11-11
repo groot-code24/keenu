@@ -88,6 +88,13 @@ fn main() -> anyhow::Result<()> {
 
 /// The service, or a command-line tool, on the runtime `main` made.
 async fn run() -> anyhow::Result<()> {
+    // Grok starts on the default its plan lists, which only keenud's catalog knows.
+    keenu_assistant::grok::set_catalog_default(|| {
+        assistant::models::current()
+            .remove("grok")
+            .map(|catalog| catalog.default)
+            .unwrap_or_default()
+    });
     let args: Vec<String> = std::env::args_os()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();

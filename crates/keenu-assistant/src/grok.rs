@@ -475,7 +475,11 @@ pub fn set_catalog_default(read: fn() -> String) {
 /// The plan's default, for a start with no model (a refused user pick is never retried here). Never left to
 /// Grok: in Keenu's fresh home it picks one a Free plan may not have (grok-4.6).
 async fn default_model(program: &Path) -> String {
-    if let Some(default) = CATALOG_DEFAULT.get().map(|read| read()).filter(|d| !d.is_empty()) {
+    if let Some(default) = CATALOG_DEFAULT
+        .get()
+        .map(|read| read())
+        .filter(|d| !d.is_empty())
+    {
         return default;
     }
     // Not listed yet (its first request): asked now, once, without holding up keenud for long.
@@ -791,7 +795,9 @@ mod tests {
         assert_eq!(toml_string("'a#b' # c"), "a#b");
         let auth = json!({"https://auth.x.ai::one": {"key": "a-token", "user_id": "a"}});
         assert!(holds_a_sign_in(&auth));
-        assert!(!holds_a_sign_in(&json!({"https://auth.x.ai::one": {"key": "", "user_id": "a"}})));
+        assert!(!holds_a_sign_in(
+            &json!({"https://auth.x.ai::one": {"key": "", "user_id": "a"}})
+        ));
         assert!(!holds_a_sign_in(&json!({})));
     }
 }

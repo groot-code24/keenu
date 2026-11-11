@@ -29,6 +29,21 @@ impl Paths {
         }
     }
 
+    pub fn assistant_log(&self) -> PathBuf {
+        self.root.join("assistant-actions.log")
+    }
+    pub fn assistant_memory(&self) -> PathBuf {
+        self.root.join("assistant-memory.bin")
+    }
+    pub fn assistant_schedule(&self) -> PathBuf {
+        self.root.join("assistant-schedule.json")
+    }
+    pub fn connectors(&self) -> PathBuf {
+        self.root.join("assistant-connectors.json")
+    }
+    pub fn assistant_workspace(&self) -> PathBuf {
+        self.root.join("assistant-workspace")
+    }
     pub fn settings(&self) -> PathBuf {
         self.root.join(settings::FILE_NAME)
     }

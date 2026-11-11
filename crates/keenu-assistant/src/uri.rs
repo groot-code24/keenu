@@ -44,7 +44,10 @@ fn from_bytes(bytes: Vec<u8>) -> PathBuf {
 #[cfg(not(unix))]
 fn from_bytes(bytes: Vec<u8>) -> PathBuf {
     let text = String::from_utf8_lossy(&bytes);
-    let text = text.strip_prefix('/').filter(|rest| rest.as_bytes().get(1) == Some(&b':')).unwrap_or(&text);
+    let text = text
+        .strip_prefix('/')
+        .filter(|rest| rest.as_bytes().get(1) == Some(&b':'))
+        .unwrap_or(&text);
     PathBuf::from(text)
 }
 

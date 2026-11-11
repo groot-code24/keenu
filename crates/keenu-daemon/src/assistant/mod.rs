@@ -11,7 +11,7 @@ mod check;
 #[cfg(test)]
 mod eval;
 mod mic;
-mod models;
+pub(crate) mod models;
 mod music;
 mod system;
 mod tasks;
@@ -277,7 +277,6 @@ fn said(text: &str) -> String {
 fn one_line(text: &str) -> String {
     soften(&text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
-
 
 /// What the D-Bus methods hand the assistant's loop.
 pub enum Command {

@@ -33,6 +33,7 @@ fn main() {
         lifecycle: Arc::new(adapters::Lifecycle),
         updates: Arc::new(adapters::Updates),
         credentials: Arc::from(keenu_security::credentials::system_store()),
+        control: Arc::new(adapters::AppControl),
         open_url: adapters::open_url,
         play_wav: adapters::play_wav,
     };

@@ -5,6 +5,7 @@
 //! crate never touches a native API, so all of it is tested against a mock platform on any system.
 
 pub mod app;
+pub mod assistant;
 pub mod cli;
 pub mod data;
 pub mod hook;

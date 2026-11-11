@@ -325,6 +325,51 @@ public static class KeenuTestClipboard {
         Check 'a notification is accepted by Windows' ($note.Code -eq 0) $note.Err
     }
 
+    # --- Using another app: a small window of the test's own, never anything else on the desktop.
+    $saved = Join-Path $root 'control-saved.txt'
+    $formFile = Join-Path $root 'control-form.ps1'
+    @'
+param([string]$Out)
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'KeenuControlTest'
+$form.Width = 360; $form.Height = 200
+$note = New-Object System.Windows.Forms.TextBox
+$note.AccessibleName = 'Note'; $note.Left = 10; $note.Top = 10; $note.Width = 300
+$secret = New-Object System.Windows.Forms.TextBox
+$secret.AccessibleName = 'Secret'; $secret.UseSystemPasswordChar = $true; $secret.Text = 'hunter4'
+$secret.Left = 10; $secret.Top = 40; $secret.Width = 300
+$button = New-Object System.Windows.Forms.Button
+$button.Text = 'Save'; $button.Left = 10; $button.Top = 80
+$button.Add_Click({ [IO.File]::WriteAllText($Out, $note.Text) })
+$form.Controls.AddRange(@($note, $secret, $button))
+[void]$form.ShowDialog()
+'@ | Set-Content -Encoding utf8 $formFile
+    $form = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $formFile, '-Out', $saved -PassThru
+    try {
+        $listed = $null
+        foreach ($attempt in 1..30) {
+            $listed = Invoke-Keenu @('--windows-list')
+            if ($listed.Out -match 'KeenuControlTest') { break }
+            Start-Sleep -Milliseconds 500
+        }
+        Check 'another app''s window is listed' ($listed.Out -match 'KeenuControlTest') "$($listed.Out) $($listed.Err)"
+        $read = Invoke-Keenu @('--window-read', 'KeenuControlTest')
+        Check 'its controls are read' ($read.Out -match '(?m)^button\tSave' -and $read.Out -match '(?m)^field\tNote') "$($read.Out) $($read.Err)"
+        Check 'a password field is marked and its text is never read' ($read.Out -match '(?m)^field\tSecret\t\t\(password field\)' -and $read.Out -notmatch 'hunter4') $read.Out
+        $typed = Invoke-Keenu @('--window-type', 'KeenuControlTest', 'Note', 'typed-by-keenu')
+        Check 'text is typed into a named field' ($typed.Code -eq 0) $typed.Err
+        $refused = Invoke-Keenu @('--window-type', 'KeenuControlTest', 'Secret', 'stolen')
+        Check 'typing into a password field is refused' ($refused.Code -ne 0) "$($refused.Out) $($refused.Err)"
+        $pressed = Invoke-Keenu @('--window-click', 'KeenuControlTest', 'Save')
+        foreach ($attempt in 1..20) { if (Test-Path $saved) { break }; Start-Sleep -Milliseconds 250 }
+        Check 'a button is pressed and the app sees the typed text' ($pressed.Code -eq 0 -and (Test-Path $saved) -and (Get-Content $saved -Raw) -eq 'typed-by-keenu') "$($pressed.Err)"
+        $closed = Invoke-Keenu @('--window-close', 'KeenuControlTest')
+        Check 'the window is asked to close and does' ($closed.Code -eq 0 -and $form.WaitForExit(10000)) $closed.Err
+    } finally {
+        if (-not $form.HasExited) { Stop-Process -Id $form.Id -Force -ErrorAction SilentlyContinue }
+    }
+
     # --- Closing
     Check 'the island closes cleanly when asked' (Stop-Island $island)
     Check 'the agent token is only readable through the data folder' (Test-Path (Join-Path $env:KEENU_DATA_DIR 'agent-token'))

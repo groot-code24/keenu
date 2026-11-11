@@ -164,7 +164,11 @@ pub fn level_of(action: &Value) -> Level {
     if action["secret"].as_bool() == Some(true)
         || ["target", "name", "label", "title", "field"]
             .iter()
-            .any(|key| action[*key].as_str().is_some_and(names_something_off_limits))
+            .any(|key| {
+                action[*key]
+                    .as_str()
+                    .is_some_and(names_something_off_limits)
+            })
     {
         return Level::Never;
     }
@@ -195,7 +199,11 @@ pub fn describe(action: &Value) -> String {
         "type_text" => format!(
             "Type “{}” into {}{within}",
             text("text"),
-            if target.is_empty() { "the field" } else { target }
+            if target.is_empty() {
+                "the field"
+            } else {
+                target
+            }
         ),
         "press_keys" => format!("Press {}{within}", text("keys")),
         "open_app" => format!("Open {}", text("app")),
@@ -255,10 +263,7 @@ mod tests {
             ask_for_everything: true,
         };
         assert_eq!(policy.decide(&json!({"type": "volume"})), Decision::Ask);
-        assert_eq!(
-            policy.decide(&json!({"type": "find_files"})),
-            Decision::Run
-        );
+        assert_eq!(policy.decide(&json!({"type": "find_files"})), Decision::Run);
     }
 
     #[test]

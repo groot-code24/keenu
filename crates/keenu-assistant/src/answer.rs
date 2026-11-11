@@ -12,13 +12,14 @@ pub const SCHEMA: &str = r#"{"type":"object","required":["say","actions"],"prope
 "say":{"type":"string"},"listen":{"type":"boolean"},"done":{"type":"boolean"},
 "actions":{"type":"array","items":{"type":"object","required":["type"],"properties":{
 "type":{"type":"string","enum":["open_url","open_app","media","focus","add_task","add_event",
-"volume","wifi","bluetooth","dnd","remind","settings","terminal","run","check","close_app","open_folder","brightness","dark_mode","night_light","power_mode","done_task","remove_task","cancel_reminder","remove_event","play_music","window","find_files","list_folder","recent_files","read_text","find_apps","top_processes","chrome_profiles","open_file","reveal_file","chrome_profile","notifications","screenshot","lock","write","arrange"]},
+"volume","wifi","bluetooth","dnd","remind","settings","terminal","run","check","close_app","open_folder","brightness","dark_mode","night_light","power_mode","done_task","remove_task","cancel_reminder","remove_event","play_music","window","find_files","list_folder","recent_files","read_text","find_apps","top_processes","chrome_profiles","open_file","reveal_file","chrome_profile","notifications","screenshot","lock","write","arrange","list_windows","read_window","focus_window","close_window","click","type_text","press_keys","memory_search","memory_add","web_search","search_x","save_report","connector"]},
 "url":{"type":"string"},"app":{"type":"string"},"command":{"type":"string"},
 "text":{"type":"string"},"date":{"type":"string"},"level":{"type":"number"},
 "minutes":{"type":"number"},"on":{"type":"boolean"},"panel":{"type":"string"},"path":{"type":"string"},"id":{"type":"number"},"query":{"type":"string"},"uri":{"type":"string"},
 "terms":{"type":"array","items":{"type":"string"}},"in":{"type":"string"},"kind":{"type":"string"},
 "profile":{"type":"string"},"title":{"type":"string"},"layout":{"type":"string"},
 "apps":{"type":"array","items":{"type":"string"}},
+"target":{"type":"string"},"window":{"type":"string"},"keys":{"type":"string"},"service":{"type":"string"},"tool":{"type":"string"},"arguments_json":{"type":"string"},
 "why":{"type":"string"},"detail":{"type":"string"},"root":{"type":"boolean"},"mode":{"type":"string"}}}}}}"#;
 
 /// One parsed answer, plus what keenud noted while getting it.

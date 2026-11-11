@@ -56,6 +56,7 @@ fn platform() -> Platform {
         lifecycle: Arc::new(Shell),
         updates: Arc::new(Updates),
         credentials: Arc::from(keenu_security::credentials::system_store()),
+        control: Arc::new(crate::control::AppControl),
         open_url,
         play_wav,
     }

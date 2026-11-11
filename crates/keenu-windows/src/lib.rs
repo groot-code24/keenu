@@ -5,6 +5,8 @@
 #[cfg(windows)]
 pub mod clipboard;
 #[cfg(windows)]
+pub mod control;
+#[cfg(windows)]
 pub mod entry;
 #[cfg(windows)]
 pub mod host;
@@ -22,5 +24,7 @@ pub mod sample;
 pub mod shell;
 #[cfg(windows)]
 pub mod system;
+#[cfg(windows)]
+mod uia;
 #[cfg(windows)]
 pub mod voice;

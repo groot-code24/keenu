@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use keenu_platform::{AudioDevice, Availability, Recording, Result, VoiceProvider};
-use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::Foundation::{ERROR_SUCCESS, S_FALSE};
 use windows::Win32::Media::Audio::{
     CALLBACK_NULL, HWAVEIN, WAVE_FORMAT_PCM, WAVE_MAPPER, WAVEFORMATEX, WAVEHDR, WAVEINCAPSW,
     WHDR_DONE, waveInAddBuffer, waveInClose, waveInGetDevCapsW, waveInGetNumDevs, waveInOpen,
@@ -20,7 +20,7 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
-use windows_core::{HSTRING, PCWSTR};
+use windows_core::{HSTRING, Interface, PCWSTR};
 
 const SAMPLE_RATE: u32 = 16_000;
 /// Half a second a buffer.
@@ -32,7 +32,13 @@ const MMSYSERR_NOERROR: u32 = 0;
 #[derive(Default)]
 pub struct Voice {
     session: Mutex<Option<Session>>,
+    /// Asks what is being said to stop.
+    stop_speech: AtomicBool,
 }
+
+/// SPEAKFLAGS: return at once, and throw away what was being said.
+const SPF_ASYNC: u32 = 1;
+const SPF_PURGEBEFORESPEAK: u32 = 2;
 
 struct Session {
     stop: Arc<AtomicBool>,
@@ -177,6 +183,31 @@ try {
 } finally { $engine.Dispose() }
 ";
 
+/// Listens for one phrase with Windows' built-in engine, on this computer, and prints `heard`. The phrase is letters and
+/// spaces only; Windows' engine holds nothing it hears beyond this process.
+fn wake_script(phrase: &str) -> String {
+    let phrase: String = phrase
+        .chars()
+        .filter(|c| c.is_alphabetic() || *c == ' ')
+        .collect();
+    format!(
+        r"
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Speech
+$engine=New-Object System.Speech.Recognition.SpeechRecognitionEngine
+try {{
+  $builder=New-Object System.Speech.Recognition.GrammarBuilder('{phrase}')
+  $engine.LoadGrammar((New-Object System.Speech.Recognition.Grammar($builder)))
+  $engine.SetInputToDefaultAudioDevice()
+  while ($true) {{
+    $result=$engine.Recognize([TimeSpan]::FromSeconds(5))
+    if ($null -ne $result -and $result.Confidence -ge 0.75) {{ [Console]::Out.Write('heard'); break }}
+  }}
+}} finally {{ $engine.Dispose() }}
+"
+    )
+}
+
 impl VoiceProvider for Voice {
     fn availability(&self) -> Availability {
         if !microphone_allowed() {
@@ -314,15 +345,94 @@ impl VoiceProvider for Voice {
     }
 
     fn speak_local(&self, text: &str) -> Result<()> {
+        self.stop_speech.store(false, Ordering::Relaxed);
         // SAFETY: a COM object on this thread, released before uninitialising.
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let result = (|| -> windows_core::Result<()> {
                 let voice: ISpVoice = CoCreateInstance(&SpVoice, None, CLSCTX_ALL)?;
-                voice.Speak(&HSTRING::from(text), 0, None)
+                voice.Speak(&HSTRING::from(text), SPF_ASYNC, None)?;
+                // A little at a time, so talking over it can stop it. Called through the table because the wrapper
+                // reads S_FALSE, "not done yet", as success.
+                let wait = |milliseconds: u32| {
+                    (Interface::vtable(&voice).WaitUntilDone)(voice.as_raw(), milliseconds)
+                };
+                while wait(100) == S_FALSE {
+                    if self.stop_speech.load(Ordering::Relaxed) {
+                        return voice.Speak(
+                            &HSTRING::from(""),
+                            SPF_ASYNC | SPF_PURGEBEFORESPEAK,
+                            None,
+                        );
+                    }
+                }
+                Ok(())
             })();
             CoUninitialize();
             result.map_err(|err| format!("Windows could not speak: {}", err.message()))
+        }
+    }
+
+    fn stop_speaking(&self) {
+        self.stop_speech.store(true, Ordering::Relaxed);
+    }
+
+    fn hears_phrases(&self) -> bool {
+        self.availability().is_available()
+    }
+
+    fn wait_for_phrase(&self, phrase: &str, stop: &AtomicBool) -> Result<bool> {
+        if let Some(why) = self.availability().reason() {
+            return Err(why.to_owned());
+        }
+        let encoded: Vec<u8> = wake_script(phrase)
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let mut child = {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new(crate::system::system32(
+                "WindowsPowerShell\\v1.0\\powershell.exe",
+            ))
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+            ])
+            .arg(base64(&encoded))
+            .creation_flags(0x0800_0000)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|err| format!("Could not start Windows speech recognition: {err}"))?
+        };
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                // The microphone closes with it.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(false);
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let mut heard = String::new();
+                    if let Some(mut out) = child.stdout.take() {
+                        use std::io::Read;
+                        let _ = out.read_to_string(&mut heard);
+                    }
+                    if heard.contains("heard") {
+                        return Ok(true);
+                    }
+                    return Err(if status.success() {
+                        "Listening for Hey Keenu stopped.".to_owned()
+                    } else {
+                        "Windows speech recognition is not available. Add a speech language in Settings > Time & language > Speech.".to_owned()
+                    });
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Err(err) => return Err(err.to_string()),
+            }
         }
     }
 }

@@ -8,13 +8,18 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, TimeZone};
+use keenu_assistant::chatgpt;
+use keenu_assistant::connectors::Connectors;
+use keenu_assistant::instructions::Tone;
+use keenu_assistant::memory::Memory;
+use keenu_assistant::schedule::{self, Repeat, Schedule};
 use keenu_core::clipboard::{Clip, ClipboardHistory};
 use keenu_core::file_shelf::{self, AddError, FileShelf};
 use keenu_core::json_file;
@@ -25,6 +30,7 @@ use keenu_core::release::Channel;
 use keenu_core::reminders::Reminders;
 use keenu_core::settings::{CalendarAccount, Settings, SpeechEngine, UpdateChannel};
 use keenu_core::usage_log::UsageLog;
+use keenu_guard::{ActionLog, Policy};
 use keenu_integrations::agents::protocol::{self, Answer, ApprovalRequest};
 use keenu_integrations::agents::{self, Agent};
 use keenu_integrations::calendar::caldav::CalDav;
@@ -36,20 +42,25 @@ use keenu_integrations::oauth::{self, TokenSource};
 use keenu_integrations::updater::{self, Update, UpdateConfig};
 use keenu_integrations::{lyrics as online_lyrics, voice as remote_voice};
 use keenu_platform::{
-    AudioDevice, Availability, ClipboardContent, ClipboardProvider, FileShelfProvider,
-    MediaCommand, MediaProvider, MediaSession, MonitorProvider, NativeNotification,
-    NotificationProvider, PlaybackState, Recording, UpdateProvider, UsageProvider, VoiceProvider,
-    WindowLifecycleProvider,
+    AppControlProvider, AudioDevice, Availability, ClipboardContent, ClipboardProvider,
+    FileShelfProvider, MediaCommand, MediaProvider, MediaSession, MonitorProvider,
+    NativeNotification, NotificationProvider, PlaybackState, Recording, UpdateProvider,
+    UsageProvider, VoiceProvider, WindowLifecycleProvider,
 };
 use keenu_security::credentials::CredentialStore;
 use keenu_security::replay::ReplayGuard;
 use keenu_ui::scene::Scene;
 use keenu_ui::view::{
-    self, AccountRow, Action, AgendaRow, AgentRow, ApprovalView, ClipRow, Field, InputView,
-    LyricsView, MediaView, OnboardingView, Page, Setting, SettingsView, ShelfRow, SwitchRow,
-    UsageRow, View, VoiceView,
+    self, AccountRow, Action, AgendaRow, AgentRow, ApprovalView, ButtonRow, ClipRow, Field,
+    InputView, LyricsView, MediaView, OnboardingView, Page, Setting, SettingsView, ShelfRow,
+    SwitchRow, UsageRow, View, VoiceView,
 };
+use serde_json::Value;
 
+use crate::assistant::{
+    self, Assistant, CREDENTIAL_API, CREDENTIAL_XAI, Fixed, Job, Progress, Route, connector_key,
+    installed_program, known_api, resolve,
+};
 use crate::data::{self, Paths, load_or_default, load_settings, now_ms};
 
 const SYNC_EVERY_MS: i64 = 15 * 60 * 1000;
@@ -63,6 +74,20 @@ const LYRICS_AFTER: usize = 3;
 /// How far ahead the calendar page looks.
 const AGENDA_DAYS: i64 = 14;
 const CREDENTIAL_VOICE: &str = "voice/api-key";
+/// How many of the assistant's steps show at once.
+const MAX_STEPS_SHOWN: usize = 3;
+/// How long the assistant waits for an answer before taking it as a no.
+const ASSISTANT_ASK_MS: i64 = 10 * 60 * 1000;
+const WAKE_PHRASE: &str = "hey keenu";
+const DEFAULT_SEARCH_MODEL: &str = "grok-4";
+
+/// The tone in the settings, plain if it is anything else.
+fn tone_of(settings: &Settings) -> Tone {
+    [Tone::Friendly, Tone::Formal, Tone::Witty]
+        .into_iter()
+        .find(|tone| tone.words().eq_ignore_ascii_case(&settings.assistant.tone))
+        .unwrap_or(Tone::Plain)
+}
 /// How long a request must have been on screen before Allow counts. It appears on its own, wherever the
 /// pointer happens to be: a click meant for something else must not approve a command nobody has read.
 const ALLOW_ARMS_AFTER_MS: i64 = 700;
@@ -79,6 +104,8 @@ pub struct Platform {
     pub lifecycle: Arc<dyn WindowLifecycleProvider>,
     pub updates: Arc<dyn UpdateProvider>,
     pub credentials: Arc<dyn CredentialStore>,
+    /// Using other apps, for the assistant.
+    pub control: Arc<dyn AppControlProvider>,
     /// Opens a web page in the default browser, for signing in.
     pub open_url: fn(&str) -> Result<(), String>,
     /// Plays WAV audio from a speech API.
@@ -115,6 +142,8 @@ struct PendingApproval {
     reply: Box<dyn FnOnce(Answer) + Send>,
     abandoned: Box<dyn Fn() -> bool + Send>,
     deadline_ms: i64,
+    /// Keenu's own assistant asks, not a coding agent.
+    own: bool,
 }
 
 enum Event {
@@ -132,6 +161,12 @@ enum Event {
     VoiceAnswer(String),
     VoiceFailed(String),
     VoiceDone,
+    AssistantHeard(String),
+    Assistant(Progress),
+    AssistantAct(Value),
+    ChatGptConnected(Result<(), String>),
+    WakeWordHeard,
+    WakeWordFailed(String),
     Thumbnail(String, Vec<u8>),
     UpdateFound(Option<Update>, String),
     UpdateProgress(String),
@@ -166,6 +201,7 @@ impl AppHandle {
             reply,
             abandoned,
             deadline_ms: now_ms() + i64::from(self.timeout_secs) * 1000,
+            own: false,
         }));
     }
 
@@ -221,6 +257,19 @@ pub struct App {
     voice_busy: bool,
     voice_heard: String,
     voice_answer: String,
+
+    next_ask: u64,
+    assistant: Option<Assistant>,
+    assistant_steps: Vec<String>,
+    speaking: bool,
+    memory: Arc<Mutex<Option<Arc<Mutex<Memory>>>>>,
+    action_log: ActionLog,
+    schedule: Schedule,
+    connectors: Connectors,
+    /// What a connector being added is called, while its other answers are asked for.
+    connector_draft: String,
+    wake_stop: Arc<AtomicBool>,
+    wake_running: bool,
 
     update_status: String,
     update: Option<Update>,
@@ -348,6 +397,17 @@ impl App {
             voice_busy: false,
             voice_heard: String::new(),
             voice_answer: String::new(),
+            next_ask: 0,
+            assistant: None,
+            assistant_steps: Vec::new(),
+            speaking: false,
+            memory: Arc::new(Mutex::new(None)),
+            action_log: ActionLog::new(paths.assistant_log()),
+            schedule: load_or_default(&paths.assistant_schedule()),
+            connectors: load_or_default(&paths.connectors()),
+            connector_draft: String::new(),
+            wake_stop: Arc::new(AtomicBool::new(false)),
+            wake_running: false,
             update_status: String::new(),
             update: None,
             update_file: None,
@@ -365,6 +425,7 @@ impl App {
         if let Some(note) = notes.first() {
             app.view.status = note.clone();
         }
+        app.open_memory();
         app.shelf.refresh_missing();
         app.maintain(now_ms());
         app.refresh_view();
@@ -383,6 +444,11 @@ impl App {
     pub fn start_workers(&self) {
         self.start_media_watch();
         self.start_usage_watch();
+    }
+
+    /// What only a host with a window starts: listening for the wake word, if the user asked.
+    pub fn start_listening(&mut self) {
+        self.sync_wake_word();
     }
 
     fn start_media_watch(&self) {
@@ -450,6 +516,7 @@ impl App {
     /// Stops the threads at their next look and saves everything.
     pub fn shut_down(&mut self) {
         self.stopping.store(true, Ordering::Relaxed);
+        self.wake_stop.store(true, Ordering::Relaxed);
         self.pump();
         self.save_all();
         // A hook left waiting gets an answer that makes its agent ask in the terminal.
@@ -464,6 +531,8 @@ impl App {
         self.save_file(&self.paths.shelf(), &self.shelf);
         self.save_file(&self.paths.usage(), &self.usage);
         self.save_file(&self.paths.reminders(), &self.reminders);
+        self.save_file(&self.paths.assistant_schedule(), &self.schedule);
+        self.save_file(&self.paths.connectors(), &self.connectors);
     }
 
     fn save_file<T: serde::Serialize>(&self, path: &Path, value: &T) {
@@ -491,7 +560,10 @@ impl App {
 
     /// Whether the island must stay open, whatever the pointer does.
     pub fn holds_open(&self) -> bool {
-        self.view.approval.is_some() || self.view.onboarding.is_some() || self.view.input.is_some()
+        self.view.approval.is_some()
+            || self.view.onboarding.is_some()
+            || self.view.input.is_some()
+            || (self.voice_busy && self.settings.assistant.enabled)
     }
 
     /// The display name chosen, empty for the primary.
@@ -592,6 +664,33 @@ impl App {
                 self.voice_busy = false;
             }
             Event::VoiceDone => self.voice_busy = false,
+            Event::AssistantHeard(text) => {
+                self.voice_busy = false;
+                self.assistant_ask(&text);
+            }
+            Event::Assistant(update) => self.on_assistant(update),
+            Event::AssistantAct(action) => self.assistant_act(&action),
+            Event::ChatGptConnected(result) => {
+                self.view.status = match result {
+                    Ok(()) => {
+                        self.settings.assistant.route = "chatgpt".into();
+                        self.save_settings();
+                        "ChatGPT is connected. Using your plan.".into()
+                    }
+                    Err(why) => why,
+                };
+            }
+            Event::WakeWordHeard => {
+                self.wake_running = false;
+                self.summon();
+                self.sync_wake_word();
+            }
+            Event::WakeWordFailed(why) => {
+                self.wake_running = false;
+                self.settings.assistant.wake_word = false;
+                self.save_settings();
+                self.view.status = why;
+            }
             Event::Thumbnail(key, bytes) => {
                 self.images.insert(key, Arc::new(bytes));
             }
@@ -745,6 +844,7 @@ impl App {
         self.expire_approvals(now);
         self.deliver_due_reminders(now);
         self.deliver_notifications();
+        self.run_due_tasks();
         if now - self.last_maintained_ms >= MAINTAIN_EVERY_MS {
             self.maintain(now);
         }
@@ -1324,6 +1424,11 @@ impl App {
     }
 
     fn voice_toggle(&mut self) {
+        // Talking over it stops it, whether or not anything else can start.
+        if self.speaking {
+            self.platform.voice.stop_speaking();
+            self.speaking = false;
+        }
         if !self.settings.voice.enabled || self.voice_busy {
             return;
         }
@@ -1361,10 +1466,15 @@ impl App {
             self.voice_endpoint(),
             self.platform.play_wav,
         );
+        let to_assistant = self.settings.assistant.enabled;
         thread::spawn(move || match voice.listen_local() {
             Ok(text) => {
                 handle.send(Event::VoiceHeard(text.clone()));
-                respond(&*voice, &handle, &settings, endpoint, &text, play);
+                if to_assistant {
+                    handle.send(Event::AssistantHeard(text));
+                } else {
+                    respond(&*voice, &handle, &settings, endpoint, &text, play);
+                }
             }
             Err(why) => handle.send(Event::VoiceFailed(why)),
         });
@@ -1378,6 +1488,7 @@ impl App {
             self.voice_endpoint(),
             self.platform.play_wav,
         );
+        let to_assistant = self.settings.assistant.enabled;
         thread::spawn(move || {
             if recording.samples.is_empty() {
                 handle.send(Event::VoiceFailed(
@@ -1394,11 +1505,639 @@ impl App {
             match remote_voice::transcribe(&target, &settings.stt_model, &wav) {
                 Ok(text) => {
                     handle.send(Event::VoiceHeard(text.clone()));
-                    respond(&*voice, &handle, &settings, endpoint.clone(), &text, play);
+                    if to_assistant {
+                        handle.send(Event::AssistantHeard(text));
+                    } else {
+                        respond(&*voice, &handle, &settings, endpoint.clone(), &text, play);
+                    }
                 }
                 Err(why) => handle.send(Event::VoiceFailed(why)),
             }
         });
+    }
+
+    /// The shortcut, or the wake word: stops what it is saying, opens the island and listens, or waits for typing.
+    pub fn summon(&mut self) {
+        if !self.settings.assistant.enabled {
+            self.set_expanded(true);
+            return;
+        }
+        self.platform.voice.stop_speaking();
+        self.speaking = false;
+        self.set_expanded(true);
+        self.view.page = Page::Voice;
+        if self.settings.voice.enabled {
+            self.voice_toggle();
+        } else {
+            self.view.input = Some(InputView {
+                field: Field::AssistantRequest,
+                text: String::new(),
+            });
+        }
+        self.refresh_view();
+    }
+
+    fn route_wanted(&self) -> Result<Route, String> {
+        let api = (!self.settings.assistant.api_base.is_empty()).then(|| {
+            (
+                self.settings.assistant.api_base.clone(),
+                self.settings.assistant.api_model.clone(),
+            )
+        });
+        let connected =
+            chatgpt::load(&*self.platform.credentials).is_some_and(|session| session.plan_allowed);
+        resolve(
+            &self.settings.assistant.route,
+            connected,
+            api,
+            &installed_program,
+        )
+    }
+
+    fn route_words(&self) -> String {
+        if !self.settings.assistant.enabled {
+            return String::new();
+        }
+        self.route_wanted()
+            .map_or_else(|_| "No AI connected".to_owned(), |route| route.words())
+    }
+
+    fn assistant_handle(&mut self) -> Assistant {
+        if let Some(assistant) = &self.assistant {
+            return assistant.clone();
+        }
+        let sink_handle = self.handle();
+        let act_handle = self.handle();
+        let assistant = assistant::start(Fixed {
+            control: self.platform.control.clone(),
+            credentials: self.platform.credentials.clone(),
+            memory: self.memory.clone(),
+            log: self.action_log.clone(),
+            workspace: self.paths.assistant_workspace(),
+            reports: dirs::document_dir()
+                .unwrap_or_else(|| self.paths.root.clone())
+                .join("Keenu Reports"),
+            system: if cfg!(windows) { "Windows" } else { "macOS" },
+            // These live on the app's own thread: handed over, and done by the next tick.
+            app_actions: Arc::new(move |action| {
+                let known = ["remind", "add_event", "media"];
+                let kind = action["type"].as_str().unwrap_or_default();
+                if !known.contains(&kind) {
+                    return Err(format!(
+                        "{kind} is not something Keenu can do on this system yet."
+                    ));
+                }
+                act_handle.send(Event::AssistantAct(action.clone()));
+                Ok("Done.".to_owned())
+            }),
+            sink: Arc::new(move |update| sink_handle.send(Event::Assistant(update))),
+        });
+        self.assistant = Some(assistant.clone());
+        assistant
+    }
+
+    fn job_for(&self, said: &str, route: Route, unattended: bool) -> Job {
+        let settings = &self.settings.assistant;
+        let notes = self
+            .memory
+            .lock()
+            .ok()
+            .and_then(|memory| memory.clone())
+            .and_then(|memory| {
+                let memory = memory.lock().ok()?;
+                memory
+                    .projects()
+                    .iter()
+                    .find(|project| project.name.eq_ignore_ascii_case(&settings.project))
+                    .map(|project| project.notes.clone())
+            })
+            .unwrap_or_default();
+        let mut agenda: Vec<String> = self
+            .view
+            .agenda
+            .iter()
+            .take(12)
+            .map(|row| {
+                format!(
+                    "- {} {} {}",
+                    row.day,
+                    row.time,
+                    keenu_assistant::soften(&row.title)
+                )
+            })
+            .collect();
+        agenda.extend(self.reminders.items().iter().take(12).map(|reminder| {
+            let when = Local
+                .timestamp_millis_opt(reminder.due_ms)
+                .single()
+                .map(|at| at.format("%a %H:%M").to_string())
+                .unwrap_or_default();
+            format!(
+                "- Reminder at {when}: {}",
+                keenu_assistant::soften(&reminder.text)
+            )
+        }));
+        Job {
+            said: said.to_owned(),
+            route,
+            tone: tone_of(&self.settings),
+            policy: Policy {
+                ask_for_everything: settings.ask_for_everything,
+            },
+            project: settings.project.clone(),
+            project_notes: notes,
+            agenda: agenda.join("\n"),
+            connectors: self.connectors.clone(),
+            unattended,
+            x_model: if settings.search_model.is_empty() {
+                DEFAULT_SEARCH_MODEL.to_owned()
+            } else {
+                settings.search_model.clone()
+            },
+        }
+    }
+
+    /// Sends a request to the assistant.
+    fn assistant_ask(&mut self, said: &str) {
+        let said = said.trim();
+        if said.is_empty() || !self.settings.assistant.enabled {
+            return;
+        }
+        if self.voice_busy {
+            self.view.status =
+                "Keenu is still working on the last request. Stop it first, or wait.".into();
+            return;
+        }
+        self.voice_error.clear();
+        self.voice_answer.clear();
+        self.voice_heard = said.to_owned();
+        self.assistant_steps.clear();
+        match self.route_wanted() {
+            Ok(route) => {
+                self.voice_busy = true;
+                let job = self.job_for(said, route, false);
+                self.assistant_handle().ask(job);
+            }
+            Err(why) => self.voice_error = why,
+        }
+    }
+
+    fn on_assistant(&mut self, update: Progress) {
+        match update {
+            Progress::Step(step) => {
+                if !step.is_empty() {
+                    self.assistant_steps.push(step);
+                    if self.assistant_steps.len() > MAX_STEPS_SHOWN {
+                        self.assistant_steps.remove(0);
+                    }
+                }
+            }
+            Progress::Draft(words) => {
+                if !words.is_empty() {
+                    self.voice_answer = words;
+                }
+            }
+            Progress::Asked(asking, answer) => {
+                self.next_ask += 1;
+                let id = format!("keenu-{}-{}", now_ms(), self.next_ask);
+                let (detail, truncated) = protocol::clean(&asking.detail, 2000);
+                self.approvals.push_back(PendingApproval {
+                    request: ApprovalRequest {
+                        id,
+                        agent: Agent::Claude,
+                        tool: asking.title,
+                        detail,
+                        truncated,
+                        cwd: String::new(),
+                        project: "Keenu".into(),
+                        description: String::new(),
+                        suggested_permissions: Vec::new(),
+                    },
+                    reply: Box::new(move |given| {
+                        answer.send(matches!(given, Answer::Allow)).ok();
+                    }),
+                    abandoned: Box::new(|| false),
+                    deadline_ms: now_ms() + ASSISTANT_ASK_MS,
+                    own: true,
+                });
+                self.set_expanded(true);
+            }
+            Progress::Done {
+                say,
+                listen,
+                unattended,
+            } => {
+                if unattended {
+                    self.notifications.push(
+                        Notification {
+                            key: format!("assistant:{}", now_ms()),
+                            title: "Keenu".into(),
+                            body: say,
+                            priority: Priority::Normal,
+                            actions: Vec::new(),
+                        },
+                        now_ms(),
+                    );
+                    return;
+                }
+                self.voice_busy = false;
+                self.assistant_steps.clear();
+                self.voice_answer = say.clone();
+                if self.settings.assistant.speak && !say.is_empty() {
+                    self.speaking = true;
+                    let (voice, handle) = (self.platform.voice.clone(), self.handle());
+                    thread::spawn(move || {
+                        if let Err(why) = voice.speak_local(&say) {
+                            handle.send(Event::Assistant(Progress::Failed {
+                                why,
+                                unattended: false,
+                            }));
+                        }
+                    });
+                } else if listen && self.settings.voice.enabled {
+                    self.voice_toggle();
+                }
+            }
+            Progress::Failed { why, unattended } => {
+                if unattended {
+                    log::warn!("a scheduled request failed: {why}");
+                    return;
+                }
+                self.voice_busy = false;
+                self.assistant_steps.clear();
+                self.voice_error = why;
+            }
+        }
+    }
+
+    /// What the assistant does in the app itself.
+    fn assistant_act(&mut self, action: &Value) {
+        let text = action["text"].as_str().unwrap_or_default();
+        match action["type"].as_str().unwrap_or_default() {
+            "add_event" => self.add_event(text),
+            "remind" => {
+                let due = action["date"]
+                    .as_str()
+                    .and_then(|date| {
+                        chrono::DateTime::parse_from_rfc3339(date)
+                            .map(|at| at.timestamp_millis())
+                            .ok()
+                            .or_else(|| {
+                                chrono::NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%S")
+                                    .ok()
+                                    .and_then(|at| Local.from_local_datetime(&at).earliest())
+                                    .map(|at| at.timestamp_millis())
+                            })
+                    })
+                    .or_else(|| action["minutes"].as_i64().map(|m| now_ms() + m * 60_000));
+                match due {
+                    Some(due) => {
+                        self.reminders.add(text, due);
+                        self.save_file(&self.paths.reminders(), &self.reminders);
+                    }
+                    None => log::warn!("a reminder came with no time"),
+                }
+            }
+            "media" => match action["command"].as_str().unwrap_or_default() {
+                "next" => self.media_command(MediaCommand::Next),
+                "previous" => self.media_command(MediaCommand::Previous),
+                _ => self.media_command(MediaCommand::PlayPause),
+            },
+            _ => {}
+        }
+    }
+
+    /// Runs what fell due, one at a time, while nothing else is running.
+    fn run_due_tasks(&mut self) {
+        if !self.settings.assistant.enabled || self.voice_busy {
+            return;
+        }
+        let due = self.schedule.take_due(&Local::now());
+        if due.is_empty() {
+            return;
+        }
+        self.save_file(&self.paths.assistant_schedule(), &self.schedule);
+        let Ok(route) = self.route_wanted() else {
+            return;
+        };
+        for task in due {
+            let job = self.job_for(&task.request, route.clone(), true);
+            self.assistant_handle().ask(job);
+        }
+    }
+
+    fn next_route(&mut self) {
+        const ROUTES: [&str; 6] = ["auto", "chatgpt", "claude", "codex", "grok", "api"];
+        let current = self.settings.assistant.route.as_str();
+        let at = ROUTES
+            .iter()
+            .position(|route| *route == current)
+            .unwrap_or(0);
+        self.settings.assistant.route = ROUTES[(at + 1) % ROUTES.len()].to_owned();
+        // Takes effect with the next request.
+        self.save_settings();
+    }
+
+    fn connect_chatgpt(&mut self) {
+        let endpoints = chatgpt::Endpoints::default();
+        let sign_in = match chatgpt::begin(&*self.platform.credentials, endpoints) {
+            Ok(sign_in) => sign_in,
+            Err(why) => {
+                self.view.status = why;
+                return;
+            }
+        };
+        if let Err(why) = (self.platform.open_url)(&sign_in.url) {
+            self.view.status = why;
+            return;
+        }
+        self.view.status = "Finish signing in with ChatGPT in your browser.".into();
+        let (store, handle) = (self.platform.credentials.clone(), self.handle());
+        thread::spawn(move || {
+            let result = sign_in.finish(&*store, Duration::from_secs(300)).map(drop);
+            handle.send(Event::ChatGptConnected(result));
+        });
+    }
+
+    fn disconnect_chatgpt(&mut self) {
+        let store = self.platform.credentials.clone();
+        let handle = self.handle();
+        thread::spawn(move || {
+            if let Err(why) = chatgpt::sign_out(&*store, &chatgpt::Endpoints::default()) {
+                handle.send(Event::Status(why));
+            }
+        });
+        if self.settings.assistant.route == "chatgpt" {
+            self.settings.assistant.route = "auto".into();
+            self.save_settings();
+        }
+    }
+
+    /// Opens the memory while its setting is on; off, it is closed, and what it holds stays on disk.
+    fn open_memory(&mut self) {
+        let opened = if self.settings.assistant.memory {
+            match Memory::open(self.paths.assistant_memory(), &*self.platform.credentials) {
+                Ok(memory) => Some(Arc::new(Mutex::new(memory))),
+                Err(why) => {
+                    self.view.status = why;
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Ok(mut memory) = self.memory.lock() {
+            *memory = opened;
+        }
+    }
+
+    fn with_memory<T>(&mut self, act: impl FnOnce(&mut Memory) -> Result<T, String>) -> Option<T> {
+        let shared = self.memory.lock().ok().and_then(|memory| memory.clone());
+        let Some(shared) = shared else {
+            self.view.status = "Turn on Remember what I ask first.".into();
+            return None;
+        };
+        let result = match shared.lock() {
+            Ok(mut memory) => act(&mut memory),
+            Err(_) => Err("The memory is not available.".to_owned()),
+        };
+        match result {
+            Ok(value) => Some(value),
+            Err(why) => {
+                self.view.status = why;
+                None
+            }
+        }
+    }
+
+    fn remember(&mut self, text: &str) {
+        if self
+            .with_memory(|memory| memory.add(text, "", now_ms()))
+            .is_some()
+        {
+            self.view.status = "Remembered.".into();
+        }
+    }
+
+    fn import_memory(&mut self, file: &str) {
+        let path = PathBuf::from(file.trim().trim_matches('"'));
+        if let Some(added) = self.with_memory(|memory| memory.import(&path, now_ms())) {
+            self.view.status = format!("Brought in {added}.");
+        }
+    }
+
+    fn forget_memory(&mut self) {
+        let opened = self.memory.lock().ok().and_then(|memory| memory.clone());
+        match opened {
+            Some(memory) => {
+                if let Ok(mut memory) = memory.lock()
+                    && let Err(why) = memory.clear()
+                {
+                    self.view.status = why;
+                }
+            }
+            None => {
+                let _ = std::fs::remove_file(self.paths.assistant_memory());
+            }
+        }
+    }
+
+    fn set_project(&mut self, text: &str) {
+        let (name, notes) = text.split_once(':').unwrap_or((text, ""));
+        let name = name.trim().to_owned();
+        if !name.is_empty() {
+            let notes = notes.trim().to_owned();
+            if self
+                .with_memory(|memory| memory.set_project(&name, &notes))
+                .is_none()
+            {
+                return;
+            }
+        }
+        self.settings.assistant.project = name;
+        self.save_settings();
+    }
+
+    fn next_project(&mut self) {
+        let names: Vec<String> = self
+            .memory
+            .lock()
+            .ok()
+            .and_then(|memory| memory.clone())
+            .and_then(|memory| {
+                let memory = memory.lock().ok()?;
+                Some(memory.projects().iter().map(|p| p.name.clone()).collect())
+            })
+            .unwrap_or_default();
+        let current = self.settings.assistant.project.clone();
+        let at = names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(&current));
+        self.settings.assistant.project = match at {
+            Some(at) if at + 1 < names.len() => names[at + 1].clone(),
+            Some(_) => String::new(),
+            None => names.first().cloned().unwrap_or_default(),
+        };
+        self.save_settings();
+    }
+
+    fn set_briefing(&mut self, text: &str) {
+        let old: Vec<u64> = self
+            .schedule
+            .briefing()
+            .map(|task| task.id)
+            .into_iter()
+            .collect();
+        for id in old {
+            self.schedule.remove(id);
+        }
+        if text.is_empty() {
+            self.settings.assistant.briefing.clear();
+        } else {
+            let Some((hour, minute)) = schedule::parse_time(text) else {
+                self.view.status = "That is not a time, such as 7:30.".into();
+                return;
+            };
+            if let Err(why) =
+                self.schedule
+                    .add(schedule::BRIEFING, Repeat::Daily { hour, minute }, now_ms())
+            {
+                self.view.status = why;
+                return;
+            }
+            self.settings.assistant.briefing = format!("{hour:02}:{minute:02}");
+        }
+        self.save_settings();
+        self.save_file(&self.paths.assistant_schedule(), &self.schedule);
+    }
+
+    /// Starts or stops listening for the wake word, to match the setting. It listens on this computer only.
+    fn sync_wake_word(&mut self) {
+        let wanted = self.settings.assistant.enabled
+            && self.settings.assistant.wake_word
+            && self.settings.voice.enabled
+            && self.platform.voice.hears_phrases();
+        if !wanted {
+            self.wake_stop.store(true, Ordering::Relaxed);
+            self.wake_running = false;
+            return;
+        }
+        if self.wake_running {
+            return;
+        }
+        self.wake_stop = Arc::new(AtomicBool::new(false));
+        self.wake_running = true;
+        let (voice, handle, stop) = (
+            self.platform.voice.clone(),
+            self.handle(),
+            self.wake_stop.clone(),
+        );
+        let _ = thread::Builder::new()
+            .name("keenu-wake".into())
+            .spawn(move || match voice.wait_for_phrase(WAKE_PHRASE, &stop) {
+                Ok(true) => handle.send(Event::WakeWordHeard),
+                Ok(false) => {}
+                Err(why) => handle.send(Event::WakeWordFailed(why)),
+            });
+    }
+
+    fn assistant_rows(&self) -> Vec<ButtonRow> {
+        let settings = &self.settings.assistant;
+        if !settings.enabled {
+            return Vec::new();
+        }
+        let chatgpt_connected =
+            chatgpt::load(&*self.platform.credentials).is_some_and(|s| s.plan_allowed);
+        let wanted = if settings.route.is_empty() {
+            "auto"
+        } else {
+            settings.route.as_str()
+        };
+        let mut rows = vec![
+            ButtonRow {
+                text: format!("AI ({wanted}): {}", self.route_words()),
+                buttons: vec![
+                    ("Next".to_owned(), Action::NextAssistantRoute),
+                    if chatgpt_connected {
+                        ("Disconnect ChatGPT".to_owned(), Action::DisconnectChatGpt)
+                    } else {
+                        ("Connect ChatGPT".to_owned(), Action::ConnectChatGpt)
+                    },
+                    (
+                        "Set API".to_owned(),
+                        Action::StartInput(Field::AssistantApiBase),
+                    ),
+                ],
+            },
+            ButtonRow {
+                text: format!("Tone: {}", tone_of(&self.settings).words()),
+                buttons: vec![("Next".to_owned(), Action::NextAssistantTone)],
+            },
+            ButtonRow {
+                text: "Live search on X and the web".to_owned(),
+                buttons: vec![("Set xAI key".to_owned(), Action::StartInput(Field::XaiKey))],
+            },
+            ButtonRow {
+                text: format!(
+                    "Project: {}",
+                    if settings.project.is_empty() {
+                        "none"
+                    } else {
+                        settings.project.as_str()
+                    }
+                ),
+                buttons: vec![
+                    ("Next".to_owned(), Action::NextProject),
+                    ("New".to_owned(), Action::StartInput(Field::ProjectName)),
+                ],
+            },
+        ];
+        if settings.memory {
+            let count = self
+                .memory
+                .lock()
+                .ok()
+                .and_then(|memory| memory.clone())
+                .and_then(|memory| memory.lock().ok().map(|m| m.facts().len()))
+                .unwrap_or(0);
+            rows.push(ButtonRow {
+                text: format!("Remembered: {count}"),
+                buttons: vec![
+                    ("Add".to_owned(), Action::StartInput(Field::MemoryAdd)),
+                    ("Import".to_owned(), Action::StartInput(Field::MemoryImport)),
+                    ("Forget all".to_owned(), Action::ForgetMemory),
+                ],
+            });
+        }
+        rows.push(ButtonRow {
+            text: format!(
+                "Morning briefing: {}",
+                if settings.briefing.is_empty() {
+                    "off"
+                } else {
+                    settings.briefing.as_str()
+                }
+            ),
+            buttons: vec![("Set".to_owned(), Action::StartInput(Field::Briefing))],
+        });
+        rows.push(ButtonRow {
+            text: format!("Connectors: {}", self.connectors.list.len()),
+            buttons: vec![("Add".to_owned(), Action::StartInput(Field::ConnectorName))],
+        });
+        for (index, connector) in self.connectors.list.iter().enumerate() {
+            rows.push(ButtonRow {
+                text: format!("{}: {}", connector.name, connector.access.words()),
+                buttons: vec![
+                    ("Change".to_owned(), Action::NextConnectorAccess(index)),
+                    ("Remove".to_owned(), Action::RemoveConnector(index)),
+                ],
+            });
+        }
+        rows.push(ButtonRow {
+            text: "What the assistant did".to_owned(),
+            buttons: vec![("Open log".to_owned(), Action::OpenActionLog)],
+        });
+        rows
     }
 
     /// What a click means.
@@ -1527,6 +2266,43 @@ impl App {
                 }
             }
             Action::VoiceToggle => self.voice_toggle(),
+            Action::AssistantStop => {
+                if let Some(assistant) = &self.assistant {
+                    assistant.stop();
+                }
+                self.platform.voice.stop_speaking();
+            }
+            Action::NextAssistantRoute => self.next_route(),
+            Action::ConnectChatGpt => self.connect_chatgpt(),
+            Action::DisconnectChatGpt => self.disconnect_chatgpt(),
+            Action::NextAssistantTone => {
+                let next = tone_of(&self.settings).next();
+                self.settings.assistant.tone = next.words().to_lowercase();
+                self.save_settings();
+            }
+            Action::NextProject => self.next_project(),
+            Action::ForgetMemory => self.forget_memory(),
+            Action::OpenActionLog => {
+                let file = self.action_log.path().to_path_buf();
+                if !file.exists() {
+                    self.view.status = "Nothing has been done yet.".into();
+                } else if let Err(why) = self.platform.shelf.open(&file) {
+                    self.view.status = why;
+                }
+            }
+            Action::NextConnectorAccess(index) => {
+                if let Some(connector) = self.connectors.list.get_mut(index) {
+                    connector.access = connector.access.next();
+                }
+                self.save_file(&self.paths.connectors(), &self.connectors);
+            }
+            Action::RemoveConnector(index) => {
+                if let Some(name) = self.connectors.list.get(index).map(|c| c.name.clone()) {
+                    self.connectors.remove(&name);
+                    let _ = self.platform.credentials.delete(&connector_key(&name));
+                }
+                self.save_file(&self.paths.connectors(), &self.connectors);
+            }
             Action::VoiceCancel => {
                 let _ = self.platform.voice.cancel();
             }
@@ -1731,6 +2507,14 @@ impl App {
         self.caches.clear();
         self.caches.insert("local".into(), AccountCache::default());
         self.settings.voice.endpoint.clear();
+        self.settings.assistant = Default::default();
+        let _ = self.platform.credentials.delete(CREDENTIAL_API);
+        let _ = self.platform.credentials.delete(CREDENTIAL_XAI);
+        self.disconnect_chatgpt();
+        self.forget_memory();
+        self.schedule = Schedule::default();
+        self.connectors = Connectors::default();
+        let _ = self.action_log.clear();
         self.save_settings();
         self.view.status = match data::delete_all_data(&self.paths) {
             Ok(()) => "Your data here has been deleted.".into(),
@@ -1782,6 +2566,34 @@ impl App {
             }
             Setting::Notifications => {
                 self.settings.notifications.enabled = !self.settings.notifications.enabled
+            }
+            Setting::Assistant => {
+                self.settings.assistant.enabled = !self.settings.assistant.enabled;
+                if !self.settings.assistant.enabled {
+                    self.settings.assistant.wake_word = false;
+                    if let Some(assistant) = &self.assistant {
+                        assistant.stop();
+                    }
+                }
+                self.sync_wake_word();
+            }
+            Setting::AssistantAskAll => {
+                self.settings.assistant.ask_for_everything =
+                    !self.settings.assistant.ask_for_everything
+            }
+            Setting::AssistantSpeak => {
+                self.settings.assistant.speak = !self.settings.assistant.speak;
+                if !self.settings.assistant.speak {
+                    self.platform.voice.stop_speaking();
+                }
+            }
+            Setting::AssistantWakeWord => {
+                self.settings.assistant.wake_word = !self.settings.assistant.wake_word;
+                self.sync_wake_word();
+            }
+            Setting::AssistantMemory => {
+                self.settings.assistant.memory = !self.settings.assistant.memory;
+                self.open_memory();
             }
             Setting::ClaudeHooks => self.toggle_hooks(Agent::Claude),
             Setting::CodexHooks => self.toggle_hooks(Agent::Codex),
@@ -1964,6 +2776,96 @@ impl App {
                             Ok(()) => "API key saved in the system's credential store.".into(),
                             Err(why) => why.to_string(),
                         };
+                }
+            }
+            Field::AssistantRequest => self.assistant_ask(&text),
+            Field::AssistantApiBase => {
+                let (base, _, _) = known_api(&text);
+                if text.is_empty() {
+                    self.settings.assistant.api_base.clear();
+                    self.settings.assistant.route = "auto".into();
+                    let _ = self.platform.credentials.delete(CREDENTIAL_API);
+                    self.save_settings();
+                } else if keenu_integrations::http::is_secure_url(&base) {
+                    self.settings.assistant.api_base = text;
+                    self.save_settings();
+                    self.view.input = Some(InputView {
+                        field: Field::AssistantApiModel,
+                        text: String::new(),
+                    });
+                } else {
+                    self.view.status = "The address must use HTTPS, or be on this computer.".into();
+                }
+            }
+            Field::AssistantApiModel => {
+                self.settings.assistant.api_model = text;
+                self.settings.assistant.route = "api".into();
+                self.save_settings();
+                // Nothing to keep for a server on this computer.
+                if known_api(&self.settings.assistant.api_base).2 {
+                    self.view.input = Some(InputView {
+                        field: Field::AssistantApiKey,
+                        text: String::new(),
+                    });
+                }
+            }
+            Field::AssistantApiKey => {
+                if !input.text.is_empty() {
+                    self.view.status =
+                        match self.platform.credentials.set(CREDENTIAL_API, &input.text) {
+                            Ok(()) => "API key saved in the system's credential store.".into(),
+                            Err(why) => why.to_string(),
+                        };
+                }
+            }
+            Field::XaiKey => {
+                let saved = if input.text.is_empty() {
+                    self.platform.credentials.delete(CREDENTIAL_XAI).map(|_| ())
+                } else {
+                    self.platform.credentials.set(CREDENTIAL_XAI, &input.text)
+                };
+                self.view.status = match saved {
+                    Ok(()) => "Live search is set.".into(),
+                    Err(why) => why.to_string(),
+                };
+            }
+            Field::MemoryAdd => self.remember(&text),
+            Field::MemoryImport => self.import_memory(&text),
+            Field::ProjectName => self.set_project(&text),
+            Field::Briefing => self.set_briefing(&text),
+            Field::ConnectorName => {
+                if !text.is_empty() {
+                    self.connector_draft = text;
+                    self.view.input = Some(InputView {
+                        field: Field::ConnectorTarget,
+                        text: String::new(),
+                    });
+                }
+            }
+            Field::ConnectorTarget => {
+                let name = self.connector_draft.clone();
+                match self.connectors.add(&name, &text) {
+                    Ok(()) => {
+                        self.save_file(&self.paths.connectors(), &self.connectors);
+                        self.view.status = format!("{name} is added, and off until you change it.");
+                        if text.contains("://") {
+                            self.view.input = Some(InputView {
+                                field: Field::ConnectorToken,
+                                text: String::new(),
+                            });
+                        }
+                    }
+                    Err(why) => self.view.status = why,
+                }
+            }
+            Field::ConnectorToken => {
+                if !input.text.is_empty()
+                    && let Err(why) = self
+                        .platform
+                        .credentials
+                        .set(&connector_key(&self.connector_draft), &input.text)
+                {
+                    self.view.status = why.to_string();
                 }
             }
             Field::UsageCategory => {
@@ -2242,6 +3144,9 @@ impl App {
                 SpeechEngine::Local => "On this computer".to_owned(),
                 SpeechEngine::Remote => host_of(&settings.endpoint),
             },
+            assistant: self.settings.assistant.enabled,
+            steps: self.assistant_steps.clone(),
+            route: self.route_words(),
         };
     }
 
@@ -2315,6 +3220,11 @@ impl App {
         } else {
             settings.window.monitor.clone()
         };
+        let wake_reason = (!self.platform.voice.hears_phrases())
+            .then(|| "Not available on this system yet".to_owned())
+            .or_else(|| {
+                (!self.settings.assistant.enabled).then(|| "Turn on the assistant first".to_owned())
+            });
         self.view.settings = SettingsView {
             switches: vec![
                 switch(
@@ -2401,7 +3311,43 @@ impl App {
                     settings.notifications.enabled,
                     notification_reason,
                 ),
+                switch(
+                    "Assistant",
+                    "An agent that uses your apps, with the AI you connect",
+                    Setting::Assistant,
+                    settings.assistant.enabled,
+                    None,
+                ),
+                switch(
+                    "Ask before small actions too",
+                    "Otherwise only what changes something asks",
+                    Setting::AssistantAskAll,
+                    settings.assistant.ask_for_everything,
+                    None,
+                ),
+                switch(
+                    "Read answers aloud",
+                    "With your system's voice",
+                    Setting::AssistantSpeak,
+                    settings.assistant.speak,
+                    None,
+                ),
+                switch(
+                    "Listen for Hey Keenu",
+                    "On this computer; the microphone stays open while on",
+                    Setting::AssistantWakeWord,
+                    settings.assistant.wake_word,
+                    wake_reason,
+                ),
+                switch(
+                    "Remember what I ask",
+                    "Encrypted on this computer; read or delete it any time",
+                    Setting::AssistantMemory,
+                    settings.assistant.memory,
+                    None,
+                ),
             ],
+            assistant_rows: self.assistant_rows(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             update_status: if self.update_status.is_empty() {
                 update_reason
@@ -2436,7 +3382,11 @@ impl App {
             let request = &pending.request;
             ApprovalView {
                 id: request.id.clone(),
-                agent: request.agent.title().to_owned(),
+                agent: if pending.own {
+                    "Keenu".to_owned()
+                } else {
+                    request.agent.title().to_owned()
+                },
                 project: request.project.clone(),
                 tool: request.tool.clone(),
                 detail: request.detail.clone(),
@@ -2444,6 +3394,7 @@ impl App {
                 cwd: request.cwd.clone(),
                 permissions: request.suggested_permissions.clone(),
                 seconds_left: ((pending.deadline_ms - now).max(0) / 1000) as u32,
+                own: pending.own,
             }
         });
     }
@@ -2740,6 +3691,46 @@ mod tests {
         }
     }
 
+    impl AppControlProvider for Mock {
+        fn availability(&self) -> Availability {
+            Availability::Available
+        }
+        fn windows(&self) -> keenu_platform::Result<Vec<keenu_platform::WindowInfo>> {
+            Ok(Vec::new())
+        }
+        fn read_window(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> keenu_platform::Result<Vec<keenu_platform::UiElement>> {
+            Ok(Vec::new())
+        }
+        fn focus_window(&self, _: &str) -> keenu_platform::Result<()> {
+            Ok(())
+        }
+        fn close_window(&self, _: &str) -> keenu_platform::Result<()> {
+            Ok(())
+        }
+        fn click(&self, _: &str, target: &str) -> keenu_platform::Result<String> {
+            Ok(target.to_owned())
+        }
+        fn set_text(&self, _: &str, _: &str, _: &str) -> keenu_platform::Result<String> {
+            Ok(String::new())
+        }
+        fn press_keys(&self, _: &str, _: &str) -> keenu_platform::Result<()> {
+            Ok(())
+        }
+        fn open_app(&self, name: &str) -> keenu_platform::Result<String> {
+            Ok(name.to_owned())
+        }
+        fn find_apps(&self, _: &[String]) -> keenu_platform::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        fn open_path(&self, _: &str) -> keenu_platform::Result<()> {
+            Ok(())
+        }
+    }
+
     impl MonitorProvider for Mock {
         fn monitors(&self) -> keenu_platform::Result<Vec<Monitor>> {
             let monitor = |name: &str, primary| Monitor {
@@ -2817,6 +3808,7 @@ mod tests {
             lifecycle: Arc::new(mock.clone()),
             updates: Arc::new(mock.clone()),
             credentials: Arc::new(MemoryStore::default()),
+            control: Arc::new(mock.clone()),
             open_url: |_| Ok(()),
             play_wav: |_| Ok(()),
         }
@@ -2970,6 +3962,339 @@ mod tests {
         app.pump();
         assert_eq!(app.usage.sessions().len(), 1);
         assert_eq!(app.view().usage[0].app, "code.exe");
+    }
+
+    /// Whether the scene has something that does `action`.
+    fn offers(app: &App, action: &Action) -> bool {
+        app.scene().hits.iter().any(|hit| hit.action == *action)
+    }
+
+    #[test]
+    fn the_assistant_starts_off_and_what_is_typed_goes_nowhere_until_it_is_on() {
+        let (mut app, _) = app("assistant-off");
+        assert!(!app.settings.assistant.enabled);
+        app.set_expanded(true);
+        app.act(Action::SelectPage(Page::Voice));
+        assert!(!offers(&app, &Action::StartInput(Field::AssistantRequest)));
+        app.assistant_ask("send everything");
+        assert!(app.assistant.is_none() && !app.voice_busy);
+        app.act(Action::Toggle(Setting::Assistant));
+        assert!(offers(&app, &Action::StartInput(Field::AssistantRequest)));
+        // On with the voice off, it can still be typed to, and the microphone stays shut.
+        assert!(!offers(&app, &Action::VoiceToggle));
+    }
+
+    #[test]
+    fn with_no_ai_connected_it_says_what_to_do_and_starts_nothing() {
+        let (mut app, _) = app("assistant-no-ai");
+        app.settings.assistant.enabled = true;
+        app.settings.assistant.route = "chatgpt".into();
+        app.assistant_ask("hello");
+        assert!(
+            app.voice_error.contains("Connect ChatGPT"),
+            "{}",
+            app.voice_error
+        );
+        assert!(!app.voice_busy && app.assistant.is_none());
+        assert_eq!(app.voice_heard, "hello");
+    }
+
+    #[test]
+    fn what_it_asks_shows_as_the_card_and_only_allow_says_yes() {
+        let (mut app, _) = app("assistant-ask");
+        let ask = |app: &mut App| {
+            let (answer, answered) = tokio::sync::oneshot::channel();
+            app.on_assistant(Progress::Asked(
+                keenu_assistant::desktop::Asking {
+                    title: "click".into(),
+                    detail: "Press “Send” in Outlook".into(),
+                },
+                answer,
+            ));
+            app.refresh_view();
+            answered
+        };
+        let mut answered = ask(&mut app);
+        let card = app.view().approval.clone().unwrap();
+        assert!(card.own && card.agent == "Keenu" && card.detail.contains("Send"));
+        assert!(
+            !app.scene()
+                .hits
+                .iter()
+                .any(|hit| matches!(hit.action, Action::ApprovalInTerminal(_)))
+        );
+        // Too soon to count, as for any request: it may not have been read.
+        app.act(Action::ApprovalAllow(card.id.clone()));
+        assert!(answered.try_recv().is_err());
+        app.shown_approval = Some((card.id.clone(), now_ms() - ALLOW_ARMS_AFTER_MS - 1));
+        app.act(Action::ApprovalAllow(card.id));
+        assert_eq!(answered.try_recv(), Ok(true));
+
+        let mut answered = ask(&mut app);
+        let card = app.view().approval.clone().unwrap();
+        app.act(Action::ApprovalDeny(card.id));
+        assert_eq!(answered.try_recv(), Ok(false));
+
+        // Unanswered is a no.
+        let mut answered = ask(&mut app);
+        app.approvals.front_mut().unwrap().deadline_ms = 0;
+        app.tick();
+        assert_eq!(answered.try_recv(), Ok(false));
+
+        // Escape is a no.
+        let mut answered = ask(&mut app);
+        app.key(Key::Escape);
+        assert_eq!(answered.try_recv(), Ok(false));
+    }
+
+    #[test]
+    fn progress_shows_on_the_voice_page_and_the_answer_replaces_it() {
+        let (mut app, _) = app("assistant-progress");
+        app.settings.assistant.enabled = true;
+        app.voice_busy = true;
+        for step in ["one", "two", "three", "four"] {
+            app.on_assistant(Progress::Step(step.into()));
+        }
+        app.on_assistant(Progress::Step(String::new()));
+        app.refresh_view();
+        assert_eq!(app.view().voice.steps, ["two", "three", "four"]);
+        app.on_assistant(Progress::Draft("Work".into()));
+        assert_eq!(app.voice_answer, "Work");
+        app.on_assistant(Progress::Done {
+            say: "Done.".into(),
+            listen: false,
+            unattended: false,
+        });
+        app.refresh_view();
+        assert!(!app.view().voice.busy && app.view().voice.steps.is_empty());
+        assert_eq!(app.view().voice.answer, "Done.");
+    }
+
+    #[test]
+    fn a_scheduled_answer_comes_as_a_notification_and_leaves_the_page_alone() {
+        let (mut app, mock) = app("assistant-scheduled");
+        app.settings.notifications.enabled = true;
+        app.voice_answer = "what was there".into();
+        app.on_assistant(Progress::Done {
+            say: "Good morning.".into(),
+            listen: false,
+            unattended: true,
+        });
+        app.tick();
+        assert_eq!(app.voice_answer, "what was there");
+        assert!(
+            mock.0
+                .notifications
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|n| n.body == "Good morning.")
+        );
+    }
+
+    #[test]
+    fn it_reads_aloud_only_if_asked_and_talking_over_it_stops_it() {
+        let (mut app, _) = app("assistant-speak");
+        app.on_assistant(Progress::Done {
+            say: "Quiet.".into(),
+            listen: false,
+            unattended: false,
+        });
+        assert!(!app.speaking);
+        app.settings.assistant.speak = true;
+        app.on_assistant(Progress::Done {
+            say: "Aloud.".into(),
+            listen: false,
+            unattended: false,
+        });
+        assert!(app.speaking);
+        app.act(Action::VoiceToggle);
+        assert!(!app.speaking);
+    }
+
+    #[test]
+    fn what_it_does_in_the_app_lands_in_the_app() {
+        let (mut app, mock) = app("assistant-app");
+        app.assistant_act(&serde_json::json!({"type": "remind", "text": "Call Ana", "date": "2030-01-01T09:00:00"}));
+        app.assistant_act(&serde_json::json!({"type": "remind", "text": "Soon", "minutes": 5}));
+        app.assistant_act(&serde_json::json!({"type": "remind", "text": "No time"}));
+        assert_eq!(app.reminders.items().len(), 2);
+        app.sessions = vec![MediaSession {
+            id: "s".into(),
+            can_play_pause: true,
+            can_next: true,
+            ..MediaSession::default()
+        }];
+        app.chosen_session = Some("s".into());
+        app.assistant_act(&serde_json::json!({"type": "media", "command": "next"}));
+        assert_eq!(*mock.0.media_commands.lock().unwrap(), [MediaCommand::Next]);
+    }
+
+    #[test]
+    fn the_settings_rows_appear_with_the_assistant_and_each_setting_changes() {
+        let (mut app, _) = app("assistant-settings");
+        app.set_expanded(true);
+        app.act(Action::SelectPage(Page::Settings));
+        assert!(app.view().settings.assistant_rows.is_empty());
+        app.act(Action::Toggle(Setting::Assistant));
+        assert!(!app.view().settings.assistant_rows.is_empty());
+        app.act(Action::NextAssistantRoute);
+        assert_eq!(app.settings.assistant.route, "chatgpt");
+        for _ in 0..5 {
+            app.act(Action::NextAssistantRoute);
+        }
+        assert_eq!(app.settings.assistant.route, "auto");
+        app.act(Action::NextAssistantTone);
+        assert_eq!(tone_of(&app.settings), Tone::Friendly);
+        // Nothing listens until asked, and it says why it cannot here.
+        let wake = app
+            .view()
+            .settings
+            .switches
+            .iter()
+            .find(|s| s.setting == Setting::AssistantWakeWord)
+            .unwrap();
+        assert!(!wake.on && wake.unavailable.is_some());
+    }
+
+    #[test]
+    fn an_api_is_set_step_by_step_and_its_key_goes_to_the_credential_store() {
+        let (mut app, _) = app("assistant-api");
+        app.settings.assistant.enabled = true;
+        let commit = |app: &mut App, field, text: &str| {
+            app.commit_input(InputView {
+                field,
+                text: text.to_owned(),
+            });
+        };
+        commit(&mut app, Field::AssistantApiBase, "http://example.org/v1");
+        assert!(app.view.status.contains("HTTPS"));
+        assert!(app.settings.assistant.api_base.is_empty());
+        commit(&mut app, Field::AssistantApiBase, "anthropic");
+        assert_eq!(
+            app.view.input.as_ref().unwrap().field,
+            Field::AssistantApiModel
+        );
+        commit(&mut app, Field::AssistantApiModel, "claude-x");
+        assert_eq!(
+            app.view.input.as_ref().unwrap().field,
+            Field::AssistantApiKey
+        );
+        assert_eq!(app.settings.assistant.route, "api");
+        commit(&mut app, Field::AssistantApiKey, "s3cret");
+        assert_eq!(
+            app.platform
+                .credentials
+                .get(CREDENTIAL_API)
+                .unwrap()
+                .unwrap(),
+            "s3cret"
+        );
+        let saved = std::fs::read_to_string(app.paths.settings()).unwrap();
+        assert!(!saved.contains("s3cret"));
+        // A model on this computer needs no key.
+        app.view.input = None;
+        commit(&mut app, Field::AssistantApiBase, "ollama");
+        commit(&mut app, Field::AssistantApiModel, "llama");
+        assert!(app.view.input.is_none());
+    }
+
+    #[test]
+    fn memory_opens_only_when_on_and_can_be_forgotten() {
+        let (mut app, _) = app("assistant-memory");
+        app.remember("Likes tea");
+        assert!(app.view.status.contains("Turn on"));
+        app.settings.assistant.enabled = true;
+        app.act(Action::Toggle(Setting::AssistantMemory));
+        app.remember("Likes tea");
+        assert!(app.paths.assistant_memory().exists());
+        let shown = app
+            .view()
+            .settings
+            .assistant_rows
+            .iter()
+            .any(|row| row.text == "Remembered: 1");
+        assert!(shown);
+        app.act(Action::ForgetMemory);
+        assert!(!app.paths.assistant_memory().exists());
+    }
+
+    #[test]
+    fn a_briefing_is_one_task_and_a_connector_starts_off() {
+        let (mut app, _) = app("assistant-briefing");
+        app.settings.assistant.enabled = true;
+        app.set_briefing("7:30");
+        app.set_briefing("8:15 am");
+        assert_eq!(app.settings.assistant.briefing, "08:15");
+        assert_eq!(app.schedule.tasks.len(), 1);
+        app.set_briefing("soon");
+        assert!(app.view.status.contains("not a time"));
+        app.set_briefing("");
+        assert!(app.schedule.tasks.is_empty());
+        app.commit_input(InputView {
+            field: Field::ConnectorName,
+            text: "Notion".into(),
+        });
+        app.commit_input(InputView {
+            field: Field::ConnectorTarget,
+            text: "https://mcp.example/n".into(),
+        });
+        assert_eq!(
+            app.connectors.list[0].access,
+            keenu_assistant::connectors::Access::Off
+        );
+        assert_eq!(
+            app.view.input.as_ref().unwrap().field,
+            Field::ConnectorToken
+        );
+        app.commit_input(InputView {
+            field: Field::ConnectorToken,
+            text: "t0k".into(),
+        });
+        assert_eq!(
+            app.platform
+                .credentials
+                .get(&connector_key("Notion"))
+                .unwrap()
+                .unwrap(),
+            "t0k"
+        );
+        app.act(Action::NextConnectorAccess(0));
+        assert_eq!(
+            app.connectors.list[0].access,
+            keenu_assistant::connectors::Access::Read
+        );
+        app.act(Action::RemoveConnector(0));
+        assert!(app.connectors.list.is_empty());
+        assert!(
+            app.platform
+                .credentials
+                .get(&connector_key("Notion"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn deleting_everything_takes_the_assistants_things_too() {
+        let (mut app, _) = app("assistant-delete");
+        app.settings.assistant.enabled = true;
+        app.settings.assistant.memory = true;
+        app.open_memory();
+        app.remember("Likes tea");
+        app.platform.credentials.set(CREDENTIAL_API, "k").unwrap();
+        app.connectors.add("N", "https://x.example").unwrap();
+        app.delete_all();
+        assert!(!app.settings.assistant.enabled);
+        assert!(!app.paths.assistant_memory().exists());
+        assert!(
+            app.platform
+                .credentials
+                .get(CREDENTIAL_API)
+                .unwrap()
+                .is_none()
+        );
+        assert!(app.connectors.list.is_empty());
     }
 
     #[test]

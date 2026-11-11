@@ -31,7 +31,10 @@ pub fn command(program: &std::path::Path) -> Command {
 
 /// The Node and script behind npm's launcher at `program`, on a system that has them.
 fn npm_script(program: &std::path::Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-    if !program.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cmd")) {
+    if !program
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd"))
+    {
         return None;
     }
     let dir = program.parent()?;
@@ -48,9 +51,9 @@ fn npm_script(program: &std::path::Path) -> Option<(std::path::PathBuf, std::pat
 /// What npm's launcher runs: `"%dp0%\\node_modules\\…\\cli.js"`, relative to the launcher's folder.
 fn script_in(launcher: &str) -> Option<String> {
     let start = launcher.find("%dp0%\\")? + "%dp0%\\".len();
-    launcher[start..].split('"').find_map(|rest| {
-        rest.ends_with(".js").then(|| rest.to_owned())
-    })
+    launcher[start..]
+        .split('"')
+        .find_map(|rest| rest.ends_with(".js").then(|| rest.to_owned()))
 }
 
 /// A started helper; dropped, it goes and takes what it started along.

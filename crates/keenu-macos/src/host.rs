@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::sync::Arc;
 
 use keenu_app::app::Waker;
@@ -39,6 +40,10 @@ struct State {
     /// Keeps the menu bar item alive.
     _status_item: Retained<NSStatusItem>,
     images: HashMap<String, Retained<NSImage>>,
+    /// The assistant's shortcut while it is held; null otherwise.
+    hotkey: *mut c_void,
+    /// Whether the shortcut was last asked for, so a refusal is not retried every second.
+    hotkey_wanted: bool,
 }
 
 /// macOS measures from the bottom of the screen; the scene from the top.
@@ -264,6 +269,7 @@ define_class!(
             STATE.with(|state| {
                 if let Some(state) = state.borrow_mut().as_mut() {
                     state.app.tick();
+                    sync_hotkey(state);
                 }
             });
             refresh();
@@ -344,6 +350,106 @@ impl Waker for TickWaker {
     fn wake(&self) {}
 }
 
+/// Carbon's global shortcuts: unlike key monitors, they ask for no Accessibility permission.
+#[repr(C)]
+struct EventTypeSpec {
+    class: u32,
+    kind: u32,
+}
+
+#[repr(C)]
+struct EventHotKeyId {
+    signature: u32,
+    id: u32,
+}
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn GetApplicationEventTarget() -> *mut c_void;
+    fn InstallEventHandler(
+        target: *mut c_void,
+        handler: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i32,
+        count: usize,
+        kinds: *const EventTypeSpec,
+        user_data: *mut c_void,
+        out: *mut *mut c_void,
+    ) -> i32;
+    fn RegisterEventHotKey(
+        code: u32,
+        modifiers: u32,
+        id: EventHotKeyId,
+        target: *mut c_void,
+        options: u32,
+        out: *mut *mut c_void,
+    ) -> i32;
+    fn UnregisterEventHotKey(hotkey: *mut c_void) -> i32;
+}
+
+/// 'keyb', kEventHotKeyPressed; Space, and the Option key.
+const EVENT_CLASS_KEYBOARD: u32 = 0x6b65_7962;
+const EVENT_HOTKEY_PRESSED: u32 = 5;
+const KEY_SPACE: u32 = 49;
+const OPTION_KEY: u32 = 1 << 11;
+
+extern "C" fn hotkey_pressed(_: *mut c_void, _: *mut c_void, _: *mut c_void) -> i32 {
+    STATE.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut() {
+            state.app.summon();
+        }
+    });
+    refresh();
+    0
+}
+
+/// Listens for the shortcut once; whether it is held is up to `sync_hotkey`.
+fn install_hotkey_handler() {
+    let kinds = EventTypeSpec {
+        class: EVENT_CLASS_KEYBOARD,
+        kind: EVENT_HOTKEY_PRESSED,
+    };
+    let mut handler = std::ptr::null_mut();
+    // SAFETY: the handler lives as long as the program; the call runs on the main thread and copies `kinds`.
+    unsafe {
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            hotkey_pressed,
+            1,
+            &kinds,
+            std::ptr::null_mut(),
+            &mut handler,
+        );
+    }
+}
+
+/// Option+Space opens the assistant. It is held only while the assistant is on, as it takes the keys from every other
+/// app, where they type a non-breaking space.
+fn sync_hotkey(state: &mut State) {
+    let wanted = state.app.settings.assistant.enabled;
+    if wanted == state.hotkey_wanted {
+        return;
+    }
+    state.hotkey_wanted = wanted;
+    // SAFETY: on the main thread; `state.hotkey` is only ever what `RegisterEventHotKey` gave.
+    unsafe {
+        if wanted {
+            let id = EventHotKeyId {
+                signature: 0x6b65_6e75,
+                id: 1,
+            };
+            let mut hotkey = std::ptr::null_mut();
+            let target = GetApplicationEventTarget();
+            if RegisterEventHotKey(KEY_SPACE, OPTION_KEY, id, target, 0, &mut hotkey) == 0 {
+                state.hotkey = hotkey;
+            } else {
+                log::warn!("another program holds Option+Space");
+            }
+        } else if !state.hotkey.is_null() {
+            UnregisterEventHotKey(state.hotkey);
+            state.hotkey = std::ptr::null_mut();
+        }
+    }
+}
+
 /// Runs the island until it is quit.
 pub fn run(platform: Platform, paths: Paths) {
     let main = MainThreadMarker::new().expect("the program starts on the main thread");
@@ -354,8 +460,9 @@ pub fn run(platform: Platform, paths: Paths) {
         let delegate = Delegate::new(main);
         application.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
-        let app = App::new(platform, paths, Arc::new(TickWaker));
+        let mut app = App::new(platform, paths, Arc::new(TickWaker));
         app.start_workers();
+        app.start_listening();
         let scene = app.scene();
 
         let frame = NSRect::new(
@@ -420,9 +527,12 @@ pub fn run(platform: Platform, paths: Paths) {
                 view,
                 _status_item: status_item,
                 images: HashMap::new(),
+                hotkey: std::ptr::null_mut(),
+                hotkey_wanted: false,
             });
         });
         refresh();
+        install_hotkey_handler();
 
         // SAFETY: the target and selector exist, and the timer runs on this run loop.
         unsafe {

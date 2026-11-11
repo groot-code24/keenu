@@ -31,8 +31,9 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_BACK,
-    VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_TAB,
+    GetKeyState, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, ReleaseCapture, SetFocus,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, UnregisterHotKey, VK_BACK, VK_ESCAPE, VK_RETURN,
+    VK_SHIFT, VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::Shell::{
     DragAcceptFiles, DragFinish, DragQueryFileW, HDROP, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
@@ -101,6 +102,7 @@ struct Host {
     tracking_mouse: bool,
     hidden_for_fullscreen: bool,
     hidden_by_user: bool,
+    hotkey_held: bool,
     dump_frames_to: Option<PathBuf>,
     /// For automated tests on a desktop in use: only the keyboard counts, not a person's clicks.
     ignore_pointer: bool,
@@ -195,6 +197,33 @@ impl Host {
                 );
             }
         }
+    }
+
+    /// Holds the assistant's shortcut only while the assistant is on, as it takes the keys from every other app.
+    fn sync_hotkey(&mut self) {
+        let wanted = self.app.settings.assistant.enabled;
+        if wanted == self.hotkey_held {
+            return;
+        }
+        // SAFETY: both act on this window only.
+        unsafe {
+            if wanted {
+                let keys = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+                if RegisterHotKey(
+                    Some(self.window),
+                    HOTKEY_ASSISTANT as i32,
+                    keys,
+                    u32::from(VK_SPACE.0),
+                )
+                .is_err()
+                {
+                    log::warn!("another program holds Ctrl+Alt+Space");
+                }
+            } else {
+                let _ = UnregisterHotKey(Some(self.window), HOTKEY_ASSISTANT as i32);
+            }
+        }
+        self.hotkey_held = wanted;
     }
 
     fn add_tray_icon(&self) {
@@ -322,6 +351,9 @@ fn dropped_files(drop: HDROP) -> Vec<PathBuf> {
     files
 }
 
+/// The shortcut that opens the assistant: Ctrl+Alt+Space.
+const HOTKEY_ASSISTANT: usize = 1;
+
 unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
@@ -353,6 +385,14 @@ unsafe extern "system" fn window_proc(
                 }
                 LRESULT(0)
             }
+            WM_HOTKEY if wparam.0 == HOTKEY_ASSISTANT => {
+                host.hidden_by_user = false;
+                host.app.summon();
+                host.repaint();
+                host.sync_visibility();
+                let _ = SetForegroundWindow(window);
+                LRESULT(0)
+            }
             WM_APP_SHOW => {
                 host.hidden_by_user = false;
                 host.app.set_expanded(true);
@@ -365,6 +405,7 @@ unsafe extern "system" fn window_proc(
                 match wparam.0 {
                     TIMER_TICK => {
                         host.app.tick();
+                        host.sync_hotkey();
                         host.repaint();
                         host.sync_visibility();
                     }
@@ -546,6 +587,7 @@ unsafe extern "system" fn window_proc(
                 LRESULT(0)
             }
             WM_DESTROY => {
+                let _ = UnregisterHotKey(Some(window), HOTKEY_ASSISTANT as i32);
                 let _ = RemoveClipboardFormatListener(window);
                 let _ = WTSUnRegisterSessionNotification(window);
                 host.remove_tray_icon();
@@ -654,9 +696,10 @@ pub fn run(platform: Platform, paths: Paths) -> Result<(), String> {
 
         let waker: Arc<dyn Waker> = Arc::new(WindowWaker(window.0 as isize));
         let lifecycle = platform.lifecycle.clone();
-        let app = App::new(platform, paths.clone(), waker);
+        let mut app = App::new(platform, paths.clone(), waker);
         start_agent_ipc(&app, &paths);
         app.start_workers();
+        app.start_listening();
 
         let painter =
             Painter::new().map_err(|err| format!("Could not start drawing: {}", err.message()))?;
@@ -672,6 +715,7 @@ pub fn run(platform: Platform, paths: Paths) -> Result<(), String> {
             tracking_mouse: false,
             hidden_for_fullscreen: false,
             hidden_by_user: false,
+            hotkey_held: false,
             dump_frames_to: std::env::var_os("KEENU_DUMP_FRAME").map(PathBuf::from),
             ignore_pointer: std::env::var_os("KEENU_TEST_IGNORE_POINTER").is_some(),
             lifecycle,

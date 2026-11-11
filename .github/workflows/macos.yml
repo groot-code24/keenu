@@ -32,7 +32,7 @@ jobs:
       - name: Lint
         run: scripts/ci/logged.sh cargo clippy --locked -p keenu-macos --all-targets -- -D warnings
       - name: Test
-        run: scripts/ci/logged.sh cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-app -p keenu-ui
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-core -p keenu-security -p keenu-integrations -p keenu-app -p keenu-ui -p keenu-assistant -p keenu-guard -p keenu-platform
       - name: Build
         env:
           KEENU_UPDATE_MANIFEST_URL: ${{ vars.KEENU_UPDATE_MANIFEST_URL || format('https://raw.githubusercontent.com/{0}/main/website/keenu-release.json', github.repository) }}
