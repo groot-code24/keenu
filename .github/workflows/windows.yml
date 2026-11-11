@@ -81,7 +81,10 @@ jobs:
         with:
           name: keenu-windows-x64-exe
           path: built
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends wixl nsis zip
+      # Ubuntu's mirrors fail now and then; one more try a minute later.
+      - run: |
+          get() { sudo apt-get update && sudo apt-get install -y --no-install-recommends wixl nsis zip; }
+          get || { sleep 60; get; }
       - name: Make the installers
         env:
           KEENU_PUBLISHER: ${{ vars.KEENU_PUBLISHER }}
