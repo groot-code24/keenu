@@ -23,8 +23,22 @@ and [the plan](docs/assistant-plan.md).
 - Memory that is off until turned on, kept encrypted, and only of what you tell it; projects; a choice of tone; a
   morning briefing at a time you set.
 - Connectors to MCP servers, each off until you give it read or write access.
+- Running the computer: put windows on a half or quarter of the screen or side by side, minimize and maximize;
+  volume and brightness; Wi-Fi and Bluetooth; dark mode; any Settings page; a screenshot; lock, sleep, restart, shut
+  down and sign out (all but lock ask first); type where the cursor is; copy, and read the clipboard when asked;
+  what the computer says about itself, its busiest programs, and commands that only look (`ipconfig`, `netsh wlan
+  show interfaces`, `winget search`...). On macOS a smaller set, and Windows has no switch other programs can use
+  for Do Not Disturb, night light or the power mode, so Keenu opens their settings.
+- Wake words: "Keenu", "Hey Keenu", "Hi", "Hello" or "OK Keenu", and "Good morning", "afternoon" or "evening Keenu",
+  with the request in the same breath or after. A greeting is answered with one. The wake word pauses while Keenu
+  listens, works or speaks.
 - New commands: `--windows-list`, `--window-read`, `--window-click`, `--window-type`, `--window-keys`,
-  `--window-close`, `--assistant-log`.
+  `--window-close`, `--assistant-log`, and `--system` to try one of the assistant's system actions without the AI.
+
+### Fixed (on the branch)
+
+- An answer read aloud left Keenu marked as speaking for good, so it never listened for the reply to a question.
+- With Keenu's island in front, "the window in front" meant the island itself; it now means the app the user was in.
 
 ### Changed
 

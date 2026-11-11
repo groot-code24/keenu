@@ -13,6 +13,8 @@ pub mod host;
 #[cfg(windows)]
 pub mod ipc;
 #[cfg(windows)]
+pub mod machine;
+#[cfg(windows)]
 pub mod media;
 #[cfg(windows)]
 pub mod notify;

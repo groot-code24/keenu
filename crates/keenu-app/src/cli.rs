@@ -65,6 +65,9 @@ With no command, starts the island (or shows the one already running).
   --window-type <title> <name> <text>    put text in a field; never a password field
   --window-keys <title> <keys>  press keys such as ctrl+s
   --window-close <title>        ask a window to close
+  --system <json>               one of the assistant's system actions without the AI, such as
+                                {\"type\":\"volume\",\"level\":30}, {\"type\":\"system_info\"} or
+                                {\"type\":\"check\",\"command\":\"ipconfig\"}. It does not ask first.
   --assistant-log [count]       what the assistant did, newest first
   --export-data <file.json>     everything of yours except secrets
   --migration-status            what was brought over from an earlier version
@@ -77,6 +80,17 @@ Set KEENU_DATA_DIR to use another data folder.
 pub fn run(args: &[String], platform: &Platform, paths: &Paths) -> Option<Result<(), String>> {
     let command = args.first()?;
     Some(dispatch(command, &args[1..], platform, paths))
+}
+
+/// This system, as the assistant's read-only checks know it.
+fn platform_name() -> &'static str {
+    if cfg!(windows) {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        "Linux"
+    }
 }
 
 fn required<'a>(args: &'a [String], at: usize, usage: &str) -> Result<&'a str, String> {
@@ -246,6 +260,26 @@ fn dispatch(
             platform
                 .control
                 .close_window(required(args, 0, "--window-close <title>")?)?;
+        }
+        // One of the assistant's system actions or reports, as it would send it, without the AI: for trying them.
+        "--system" => {
+            let usage = r#"--system {"type":"volume","level":30}"#;
+            let action: serde_json::Value = serde_json::from_str(required(args, 0, usage)?)
+                .map_err(|err| format!("{usage}: {err}"))?;
+            let kind = action["type"].as_str().unwrap_or_default();
+            let said = if kind == "check" {
+                let line = action["command"].as_str().unwrap_or_default();
+                let (program, words) = keenu_assistant::system::check_line(platform_name(), line)?;
+                keenu_assistant::system::run_check(line, &program, &words)
+            } else if let Some(report) = keenu_assistant::system::report(kind) {
+                platform.control.report(report)?
+            } else {
+                match keenu_assistant::system::command(&action) {
+                    Some(command) => platform.control.system(&command?)?,
+                    None => return Err(format!("“{kind}” is not a system action.")),
+                }
+            };
+            println!("{said}");
         }
         "--assistant-log" => {
             let count = args

@@ -22,6 +22,7 @@ pub mod memory;
 pub mod private;
 pub mod schedule;
 pub mod sign_in;
+pub mod system;
 pub mod uri;
 
 /// `text` with every run of quotes cut to one, so no number of them adds up to a closing \"\"\".

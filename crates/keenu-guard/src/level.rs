@@ -74,6 +74,7 @@ const LOOK: &[&str] = &[
     "recent_files",
     "research",
     "search_x",
+    "system_info",
     "top_processes",
     "web_search",
 ];
@@ -87,6 +88,7 @@ const REVERSIBLE: &[&str] = &[
     "brightness",
     "chrome_profile",
     "close_app",
+    "copy_text",
     "dark_mode",
     "dnd",
     "done_task",
@@ -212,6 +214,22 @@ pub fn describe(action: &Value) -> String {
         "run" => format!("Run: {}", text("command")),
         "connector" => format!("{}: {}", text("service"), text("tool")),
         "web_search" | "research" => format!("Search the web for “{}”", text("query")),
+        "write" => format!("Type “{}” where the cursor is", text("text")),
+        "read_clipboard" => "Read what is on the clipboard".into(),
+        "power" => match text("command")
+            .to_lowercase()
+            .replace([' ', '-'], "_")
+            .as_str()
+        {
+            "sleep" => "Put the computer to sleep".into(),
+            "restart" | "reboot" => {
+                "Restart the computer now: unsaved work in open apps is lost".into()
+            }
+            "sign_out" | "log_out" | "logout" => {
+                "Sign out now: unsaved work in open apps is lost".into()
+            }
+            _ => "Shut down the computer now: unsaved work in open apps is lost".into(),
+        },
         "search_x" => format!("Search X for “{}”", text("query")),
         "" => "Do something it did not name".into(),
         kind => kind.replace('_', " "),
@@ -243,6 +261,27 @@ mod tests {
             policy.decide(&json!({"type": "run", "command": "ls"})),
             Decision::Ask
         );
+    }
+
+    #[test]
+    fn ending_the_session_typing_for_the_user_and_reading_the_clipboard_ask() {
+        let policy = Policy::default();
+        for action in [
+            json!({"type": "power", "command": "shut_down"}),
+            json!({"type": "write", "text": "Dear Ana"}),
+            json!({"type": "read_clipboard"}),
+        ] {
+            assert_eq!(policy.decide(&action), Decision::Ask, "{action}");
+        }
+        assert_eq!(
+            policy.decide(&json!({"type": "system_info"})),
+            Decision::Run
+        );
+        assert_eq!(
+            policy.decide(&json!({"type": "volume", "level": 30})),
+            Decision::Run
+        );
+        assert!(describe(&json!({"type": "power", "command": "restart"})).contains("unsaved work"));
     }
 
     #[test]

@@ -18,6 +18,8 @@ keenu-core.workspace = true
 keenu-platform.workspace = true
 keenu-security.workspace = true
 keenu-ui.workspace = true
+# Names the screenshots it saves.
+chrono.workspace = true
 log.workspace = true
 
 objc2 = "0.6"

@@ -1261,7 +1261,7 @@ fn voice_page(frame: &mut Frame, view: &View, body: Rect) {
     } else if voice.busy {
         "Working..."
     } else if voice.wake_listening {
-        "Listening for “Hey Keenu”, on this computer. Or click to speak"
+        "Listening for “Keenu”, on this computer. Or click to speak"
     } else {
         "Click to speak"
     };

@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use keenu_platform::{
-    AppControlProvider, AudioDevice, Availability, ClipboardContent, ClipboardProvider,
+    Adjust, AppControlProvider, AudioDevice, Availability, ClipboardContent, ClipboardProvider,
     FileShelfProvider, KeyCombo, MediaCommand, MediaProvider, MediaSession, Monitor,
-    MonitorProvider, NativeNotification, NotificationProvider, PlaybackState, Recording, Result,
-    SECRET_FIELD, UiElement, UpdateProvider, UsageProvider, VoiceProvider, WindowInfo,
-    WindowLifecycleProvider, holds, pick_element,
+    MonitorProvider, NOT_HERE, NativeNotification, NotificationProvider, PlaybackState, Power,
+    Recording, Report, Result, SECRET_FIELD, SystemCommand, UiElement, UpdateProvider,
+    UsageProvider, VoiceProvider, WindowInfo, WindowLifecycleProvider, holds, pick_element,
 };
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSScreen, NSWorkspace};
@@ -684,5 +684,167 @@ return out"#;
         } else {
             Err("macOS could not open that.".into())
         }
+    }
+
+    fn system(&self, command: &SystemCommand) -> Result<String> {
+        match command {
+            SystemCommand::Volume(adjust) => {
+                let script = match adjust {
+                    Adjust::Set(level) => {
+                        format!("set volume output volume {level} without output muted")
+                    }
+                    Adjust::Up => "set volume output volume ((output volume of (get volume settings)) + 10) without output muted".into(),
+                    Adjust::Down => "set volume output volume ((output volume of (get volume settings)) - 10)".into(),
+                    Adjust::Mute => "set volume with output muted".into(),
+                    Adjust::Unmute => "set volume without output muted".into(),
+                };
+                osascript(&script).map(|_| "Done.".to_owned())
+            }
+            SystemCommand::DarkMode(on) => system_events(&format!(
+                "tell appearance preferences to set dark mode to {on}"
+            ))
+            .map(|_| {
+                if *on {
+                    "Dark mode on."
+                } else {
+                    "Dark mode off."
+                }
+                .to_owned()
+            }),
+            SystemCommand::Wifi(on) => {
+                let ports = output("/usr/sbin/networksetup", &["-listallhardwareports"])?;
+                let device = wifi_device(&ports).ok_or("This Mac has no Wi-Fi.")?;
+                output(
+                    "/usr/sbin/networksetup",
+                    &["-setairportpower", &device, if *on { "on" } else { "off" }],
+                )
+                .map(|_| if *on { "Wi-Fi on." } else { "Wi-Fi off." }.to_owned())
+            }
+            SystemCommand::Settings(panel) => {
+                let page = settings_page(panel);
+                self.open_path(&format!("x-apple.systempreferences:{page}"))
+                    .map(|()| "Opened System Settings.".to_owned())
+            }
+            SystemCommand::Screenshot => {
+                let file = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default()
+                    .join("Desktop")
+                    .join(format!(
+                        "Keenu {}.png",
+                        chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
+                    ));
+                output("/usr/sbin/screencapture", &["-x", &file.to_string_lossy()])
+                    .map(|_| format!("Saved a picture of the screen as {}.", file.display()))
+            }
+            // The Lock Screen shortcut, as macOS has no command for it.
+            SystemCommand::Lock => {
+                system_events("keystroke \"q\" using {control down, command down}")
+                    .map(|_| "Locked.".to_owned())
+            }
+            SystemCommand::Power(Power::Sleep) => {
+                output("/usr/bin/pmset", &["sleepnow"]).map(|_| "Sleeping.".to_owned())
+            }
+            SystemCommand::Power(what) => {
+                let verb = match what {
+                    Power::Restart => "restart",
+                    Power::ShutDown => "shut down",
+                    _ => "log out",
+                };
+                system_events(verb).map(|_| format!("Asked macOS to {verb}."))
+            }
+            SystemCommand::Write(text) => system_events(&format!("keystroke {}", quoted(text)))
+                .map(|_| "Typed it.".to_owned()),
+            SystemCommand::Copy(text) => Clipboard
+                .write(&ClipboardContent::Text(text.clone()))
+                .map(|()| "Copied.".to_owned()),
+            SystemCommand::Window { window, command } if command == "focus" => {
+                self.focus_window(window).map(|()| "In front.".to_owned())
+            }
+            SystemCommand::Window { window, command } if command == "close" => self
+                .close_window(window)
+                .map(|()| "Asked it to close.".to_owned()),
+            // No public way to set them from another program: brightness, Bluetooth, tiling windows.
+            _ => Err(NOT_HERE.into()),
+        }
+    }
+
+    fn report(&self, report: Report) -> Result<String> {
+        match report {
+            Report::TopProcesses => {
+                let by_processor = output("/bin/ps", &["-Aceo", "pcpu,pmem,comm", "-r"])?;
+                let by_memory = output("/bin/ps", &["-Aceo", "pcpu,pmem,comm", "-m"])?;
+                let first = |text: &str| text.lines().take(9).collect::<Vec<_>>().join("\n");
+                Ok(format!(
+                    "Using the processor most:\n{}\nUsing the most memory:\n{}",
+                    first(&by_processor),
+                    first(&by_memory)
+                ))
+            }
+            Report::SystemInfo => {
+                let mut said = Vec::new();
+                for (program, args) in [
+                    ("/usr/bin/sw_vers", &[][..]),
+                    ("/usr/bin/uptime", &[][..]),
+                    ("/usr/bin/pmset", &["-g", "batt"][..]),
+                    ("/bin/df", &["-h", "/"][..]),
+                ] {
+                    if let Ok(text) = output(program, args) {
+                        said.push(text);
+                    }
+                }
+                Ok(said.join("\n"))
+            }
+            Report::Clipboard => Ok(match Clipboard.read()? {
+                Some(ClipboardContent::Text(text) | ClipboardContent::Rich { text, .. }) => text,
+                Some(_) => "Something that is not text.".into(),
+                None => "Nothing.".into(),
+            }),
+        }
+    }
+}
+
+/// What `program` printed, run with `args`.
+fn output(program: &str, args: &[&str]) -> Result<String> {
+    let done = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|err| format!("Could not run {program}: {err}"))?;
+    if done.status.success() {
+        Ok(String::from_utf8_lossy(&done.stdout).trim().to_owned())
+    } else {
+        Err(String::from_utf8_lossy(&done.stderr).trim().to_owned())
+    }
+}
+
+/// The Wi-Fi device in `networksetup -listallhardwareports`: the "Device:" line after "Hardware Port: Wi-Fi".
+fn wifi_device(ports: &str) -> Option<String> {
+    let mut lines = ports.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() == "Hardware Port: Wi-Fi" {
+            return lines
+                .next()?
+                .trim()
+                .strip_prefix("Device: ")
+                .map(str::to_owned);
+        }
+    }
+    None
+}
+
+/// The System Settings page for `panel`, as macOS 13 and later name them.
+fn settings_page(panel: &str) -> &'static str {
+    match panel {
+        "wifi" => "com.apple.wifi-settings-extension",
+        "bluetooth" => "com.apple.BluetoothSettings",
+        "display" => "com.apple.Displays-Settings.extension",
+        "sound" => "com.apple.Sound-Settings.extension",
+        "notifications" => "com.apple.Notifications-Settings.extension",
+        "power" | "battery" => "com.apple.Battery-Settings.extension",
+        "privacy" => "com.apple.settings.PrivacySecurity.extension",
+        "network" => "com.apple.Network-Settings.extension",
+        "keyboard" => "com.apple.Keyboard-Settings.extension",
+        "update" => "com.apple.Software-Update-Settings.extension",
+        _ => "",
     }
 }

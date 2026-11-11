@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The few UI Automation interfaces Keenu uses, declared here instead of through the `windows` crate's
-//! `Win32_UI_Accessibility` feature, which nearly doubles the memory it takes to compile that crate. Each interface
-//! lists its methods in the order of `UIAutomationClient.h` up to the last one Keenu calls; the numbered ones only hold
-//! their places in the table and are never called.
+//! The few COM interfaces Keenu uses that the `windows` crate offers only behind its largest features, declared here:
+//! UI Automation's (`Win32_UI_Accessibility` nearly doubles the memory it takes to compile that crate) and the sound
+//! volume's (whose `IMMDevice::Activate` needs the Variant features). Each interface lists its methods in the order of
+//! its header up to the last one Keenu calls; the numbered ones only hold their places in the table and are never
+//! called.
 
 #![allow(non_snake_case, dead_code)]
 
@@ -115,6 +116,35 @@ pub unsafe trait IUIAutomationSelectionItemPattern: IUnknown {
 pub unsafe trait IUIAutomationValuePattern: IUnknown {
     fn SetValue(&self, value: *const u16) -> HRESULT;
     fn CurrentValue(&self, value: *mut BSTR) -> HRESULT;
+}
+
+/// `IMMDevice`, for its `Activate`: the `windows` crate's needs its Variant features.
+#[interface("d666063f-1587-4e43-81f1-b948e807363f")]
+pub unsafe trait IMMDeviceActivate: IUnknown {
+    pub fn Activate(
+        &self,
+        iid: *const GUID,
+        context: u32,
+        params: *const c_void,
+        out: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
+/// The volume interface, in the order of `endpointvolume.h`.
+#[interface("5cdf2c82-841e-4546-9722-0cf74078229a")]
+pub unsafe trait IAudioEndpointVolume: IUnknown {
+    fn _1(&self) -> HRESULT;
+    fn _2(&self) -> HRESULT;
+    fn _3(&self) -> HRESULT;
+    fn _4(&self) -> HRESULT;
+    pub fn SetMasterVolumeLevelScalar(&self, level: f32, context: *const GUID) -> HRESULT;
+    fn _6(&self) -> HRESULT;
+    pub fn GetMasterVolumeLevelScalar(&self, level: *mut f32) -> HRESULT;
+    fn _8(&self) -> HRESULT;
+    fn _9(&self) -> HRESULT;
+    fn _10(&self) -> HRESULT;
+    fn _11(&self) -> HRESULT;
+    pub fn SetMute(&self, mute: BOOL, context: *const GUID) -> HRESULT;
 }
 
 /// The object a call hands back; an empty answer is an error, as UI Automation gives one for a missing pattern.

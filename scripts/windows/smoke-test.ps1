@@ -361,9 +361,35 @@ $form.Controls.AddRange(@($note, $secret, $button))
         Check 'text is typed into a named field' ($typed.Code -eq 0) $typed.Err
         $refused = Invoke-Keenu @('--window-type', 'KeenuControlTest', 'Secret', 'stolen')
         Check 'typing into a password field is refused' ($refused.Code -ne 0) "$($refused.Out) $($refused.Err)"
+        # The assistant's system actions, as it sends them. Start-Process quotes nothing, so the argument is quoted here.
+        function Invoke-KeenuSystem($json) { Invoke-Keenu @('--system', ('"' + ($json -replace '"', '\"') + '"')) }
+        $placed = Invoke-KeenuSystem '{"type":"window","command":"left","window":"KeenuControlTest"}'
+        $form32 = [KeenuSmoke]::FindWindowW($null, 'KeenuControlTest')
+        $rect = New-Object KeenuSmoke+RECT
+        [void][KeenuSmoke]::GetWindowRect($form32, [ref]$rect)
+        Check 'a window is put on the left half' ($placed.Code -eq 0 -and $rect.left -lt 50 -and ($rect.right - $rect.left) -gt 300) "$($placed.Out) $($placed.Err) $($rect.left),$($rect.right)"
+        $focus = Invoke-KeenuSystem '{"type":"window","command":"focus","window":"KeenuControlTest"}'
+        if ($focus.Code -ne 0) {
+            Skip 'typing where the cursor is' "Windows would not bring the window to the front here: $($focus.Err)"
+        } else {
+            $wrote = Invoke-KeenuSystem '{"type":"write","text":"-and-more"}'
+            Check 'text is typed where the cursor is' ($wrote.Code -eq 0) "$($wrote.Err)"
+        }
+        $info = Invoke-KeenuSystem '{"type":"system_info"}'
+        Check 'the system describes itself' ($info.Code -eq 0 -and $info.Out -match 'System:' -and $info.Out -match 'Memory:') "$($info.Out) $($info.Err)"
+        $busy = Invoke-KeenuSystem '{"type":"top_processes"}'
+        Check 'the busiest programs are listed' ($busy.Code -eq 0 -and $busy.Out -match 'Using the most memory') "$($busy.Out) $($busy.Err)"
+        $looked = Invoke-KeenuSystem '{"type":"check","command":"ipconfig"}'
+        Check 'a command that only looks runs' ($looked.Code -eq 0 -and $looked.Out -match 'ran') "$($looked.Out) $($looked.Err)"
+        $keys = Invoke-KeenuSystem '{"type":"check","command":"netsh wlan show profile name=x key=clear"}'
+        Check 'a command that would show a Wi-Fi password is refused' ($keys.Code -ne 0) "$($keys.Out)"
+        $picture = Invoke-KeenuSystem '{"type":"screenshot"}'
+        $shot = [regex]::Match($picture.Out, 'as (.+\.png)\.').Groups[1].Value
+        Check 'a picture of the screen is saved' ($picture.Code -eq 0 -and $shot -and (Test-Path $shot)) "$($picture.Out) $($picture.Err)"
+        if ($shot -and (Test-Path $shot)) { Remove-Item $shot -Force }
         $pressed = Invoke-Keenu @('--window-click', 'KeenuControlTest', 'Save')
         foreach ($attempt in 1..20) { if (Test-Path $saved) { break }; Start-Sleep -Milliseconds 250 }
-        Check 'a button is pressed and the app sees the typed text' ($pressed.Code -eq 0 -and (Test-Path $saved) -and (Get-Content $saved -Raw) -eq 'typed-by-keenu') "$($pressed.Err)"
+        Check 'a button is pressed and the app sees the typed text' ($pressed.Code -eq 0 -and (Test-Path $saved) -and (Get-Content $saved -Raw) -match 'typed-by-keenu') "$($pressed.Err)"
         $closed = Invoke-Keenu @('--window-close', 'KeenuControlTest')
         Check 'the window is asked to close and does' ($closed.Code -eq 0 -and $form.WaitForExit(10000)) $closed.Err
     } finally {

@@ -47,9 +47,15 @@ The microphone is opened only while you are recording, on your action, and the i
 is closed the moment you stop or cancel, and it cannot start while voice is off. Audio is not kept after it is
 turned into words.
 
-"Hey Keenu" (Windows only) is off until you turn it on, and then needs the assistant and voice on as well. While
-it is on, Windows' own speech engine listens on this computer for that phrase alone, and the island shows the
-microphone as in use. Nothing it hears leaves the computer or is kept.
+The wake word (Windows only: "Keenu", "Hey Keenu", "Good morning, Keenu" and the like) is off until you turn it
+on, and then needs the assistant and voice on as well. While it is on, Windows' own speech engine listens on this
+computer for those phrases, and the island shows the microphone as in use. What you say after the phrase in the same
+breath becomes your request and goes to the AI you connected, as a typed request would; nothing else it hears leaves
+the computer or is kept. It pauses while Keenu listens to a request, works on it or speaks.
+
+A screenshot the assistant takes is saved in your Pictures\Screenshots folder (Desktop on macOS) and stays there:
+it is not sent to the AI. The clipboard is read only when you ask about it, after you allow it on the card, and
+never what a password manager marked as private.
 
 ## Coding agents
 

@@ -183,29 +183,52 @@ try {
 } finally { $engine.Dispose() }
 ";
 
-/// Listens for one phrase with Windows' built-in engine, on this computer, and prints `heard`. The phrase is letters and
-/// spaces only; Windows' engine holds nothing it hears beyond this process.
-fn wake_script(phrase: &str) -> String {
-    let phrase: String = phrase
-        .chars()
-        .filter(|c| c.is_alphabetic() || *c == ' ')
-        .collect();
-    format!(
-        r"
+/// Listens with Windows' built-in engine, on this computer, until one of the phrases starts what is said, and prints
+/// `heard`, a tab and all of it ("Keenu open Spotify"). Windows' engine holds nothing it hears beyond this process.
+const WAKE_SCRIPT: &str = r#"
 $ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Speech
+$phrases=[string[]]@(__PHRASES__)
 $engine=New-Object System.Speech.Recognition.SpeechRecognitionEngine
-try {{
-  $builder=New-Object System.Speech.Recognition.GrammarBuilder('{phrase}')
-  $engine.LoadGrammar((New-Object System.Speech.Recognition.Grammar($builder)))
+try {
+  $alone=New-Object System.Speech.Recognition.GrammarBuilder
+  $alone.Append((New-Object System.Speech.Recognition.Choices(,$phrases)))
+  $asked=New-Object System.Speech.Recognition.GrammarBuilder
+  $asked.Append((New-Object System.Speech.Recognition.Choices(,$phrases)))
+  $asked.AppendDictation()
+  $engine.LoadGrammar((New-Object System.Speech.Recognition.Grammar($alone)))
+  $engine.LoadGrammar((New-Object System.Speech.Recognition.Grammar($asked)))
   $engine.SetInputToDefaultAudioDevice()
-  while ($true) {{
+  while ($true) {
     $result=$engine.Recognize([TimeSpan]::FromSeconds(5))
-    if ($null -ne $result -and $result.Confidence -ge 0.75) {{ [Console]::Out.Write('heard'); break }}
-  }}
-}} finally {{ $engine.Dispose() }}
-"
-    )
+    if ($null -eq $result) { continue }
+    $said=$result.Text.ToLowerInvariant()
+    $phrase=$phrases | Sort-Object Length -Descending | Where-Object { $said -eq $_ -or $said.StartsWith($_ + ' ') } | Select-Object -First 1
+    if ($null -eq $phrase) { continue }
+    $count=$phrase.Split(' ').Count
+    # Surer of a name said on its own, which other words sound like more often.
+    $need=if ($count -eq 1) { 0.8 } else { 0.7 }
+    $sure=($result.Words | Select-Object -First $count | Measure-Object -Property Confidence -Minimum).Minimum
+    if ($sure -ge $need) { [Console]::Out.Write("heard`t" + $result.Text); break }
+  }
+} finally { $engine.Dispose() }
+"#;
+
+/// The wake script for `phrases`, each kept to letters and spaces.
+fn wake_script(phrases: &[&str]) -> String {
+    let list: Vec<String> = phrases
+        .iter()
+        .map(|phrase| {
+            let clean: String = phrase
+                .chars()
+                .filter(|c| c.is_alphabetic() || *c == ' ')
+                .collect();
+            format!("'{}'", clean.trim().to_lowercase())
+        })
+        .filter(|quoted| quoted != "''")
+        .collect();
+    WAKE_SCRIPT.replace("__PHRASES__", &list.join(","))
 }
 
 impl VoiceProvider for Voice {
@@ -381,11 +404,11 @@ impl VoiceProvider for Voice {
         self.availability().is_available()
     }
 
-    fn wait_for_phrase(&self, phrase: &str, stop: &AtomicBool) -> Result<bool> {
+    fn wait_for_wake(&self, phrases: &[&str], stop: &AtomicBool) -> Result<Option<String>> {
         if let Some(why) = self.availability().reason() {
             return Err(why.to_owned());
         }
-        let encoded: Vec<u8> = wake_script(phrase)
+        let encoded: Vec<u8> = wake_script(phrases)
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect();
@@ -412,7 +435,7 @@ impl VoiceProvider for Voice {
                 // The microphone closes with it.
                 let _ = child.kill();
                 let _ = child.wait();
-                return Ok(false);
+                return Ok(None);
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -421,11 +444,12 @@ impl VoiceProvider for Voice {
                         use std::io::Read;
                         let _ = out.read_to_string(&mut heard);
                     }
-                    if heard.contains("heard") {
-                        return Ok(true);
+                    if let Some(said) = heard.strip_prefix("heard	") {
+                        let rest = keenu_platform::after_wake(said, phrases).unwrap_or_default();
+                        return Ok(Some(rest));
                     }
                     return Err(if status.success() {
-                        "Listening for Hey Keenu stopped.".to_owned()
+                        "Listening for “Keenu” stopped.".to_owned()
                     } else {
                         "Windows speech recognition is not available. Add a speech language in Settings > Time & language > Speech.".to_owned()
                     });
@@ -437,7 +461,7 @@ impl VoiceProvider for Voice {
     }
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len() * 4 / 3 + 4);
     for chunk in bytes.chunks(3) {
@@ -481,6 +505,16 @@ pub fn play_wav(wav: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wake_phrase_cannot_leave_its_quotes() {
+        let script = wake_script(&["Hey Keenu", "it's'; Remove-Item x; '", ""]);
+        assert!(
+            script.contains("@('hey keenu','its removeitem x')"),
+            "{script}"
+        );
+        assert!(!script.contains("__PHRASES__"));
+    }
 
     #[test]
     fn encodes_the_script_as_powershell_wants() {

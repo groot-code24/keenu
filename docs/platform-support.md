@@ -72,7 +72,18 @@ Official Windows releases are built with MSVC by CI. The real desktop runs above
 | An API (OpenAI-, Anthropic-compatible, local) | Mock-tested | Not yet | Mock-tested |
 | Claude Code, Codex, Grok as the AI | **Not run** with the real programs | Existing | **Not run** |
 | Spoken answers, and stopping them | Compiles; needs a person | Existing | Compiles; needs a person |
-| "Hey Keenu" | Compiles; needs a person with a microphone and a Windows speech language | Not yet | Not yet |
+| Wake words: "Keenu", "Hey Keenu", "Hi/Hello/OK Keenu", "Good morning/afternoon/evening Keenu", with or without the request in the same breath | Compiles; needs a person with a microphone and a Windows speech language. How well Windows' engine hears "Keenu" is not known | Not yet | Not yet |
+| Windows on the screen: minimize, maximize, halves, quarters, side by side | Smoke test puts a real window on the left half; tiling several is unit-tested only | keenud, existing | Focus and close only |
+| Volume | Compiles; CI's machine has no sound device | keenud, existing | Compiles |
+| Brightness | Compiles; works only where the display lets Windows set it (most laptop screens) | keenud, existing | **Not supported**: no public way |
+| Wi-Fi and Bluetooth on and off | Compiles; needs a person. Windows may refuse desktop programs: then Keenu says so | keenud, existing | Wi-Fi compiles; Bluetooth **not supported** |
+| Dark mode, Settings pages | Compiles | keenud, existing | Compiles |
+| Do Not Disturb, night light, power mode | **Not supported**: no switch for other programs; their Settings page opens | keenud, existing | As Windows |
+| Screenshot | Smoke test saves a real one | keenud, existing | Compiles |
+| Lock, sleep, restart, shut down, sign out | Compiles; not run, on purpose. All but lock ask first | keenud: lock | Compiles |
+| Typing where the cursor is | Smoke test, when the runner lets a window come to the front | keenud, existing | Compiles |
+| Clipboard: copy, read when asked | Compiles; reading asks first | keenud | Compiles |
+| System report, busiest programs, read-only checks | Smoke test runs each, and refuses a check that would show a Wi-Fi password | keenud, existing | Compiles |
 | Shortcut: Ctrl+Alt+Space, Option+Space | Compiles; needs a person | Super+I, existing | Compiles; needs a person |
 | Memory, projects, tone | Unit-tested, encryption included | Not yet | Unit-tested |
 | Morning briefing, tasks | Unit-tested | Not yet | Unit-tested |

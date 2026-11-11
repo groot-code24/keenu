@@ -163,16 +163,17 @@ pub trait VoiceProvider: Send + Sync {
     fn speak_local(&self, text: &str) -> Result<()>;
     /// Stops what `speak_local` is saying, so the user can talk over it.
     fn stop_speaking(&self) {}
-    /// Listens on this computer until `phrase` is heard (`true`) or `stop` is set (`false`). The microphone is open for
-    /// as long as this runs, so it runs only while the user has asked for it.
-    fn wait_for_phrase(
+    /// Listens on this computer until one of `phrases` is heard, or `stop` is set (`None`). What was said after the
+    /// phrase in the same breath comes back ("Keenu, open Spotify" gives "open Spotify"), and is empty when there was
+    /// nothing. The microphone is open for as long as this runs, so it runs only while the user has asked for it.
+    fn wait_for_wake(
         &self,
-        _phrase: &str,
+        _phrases: &[&str],
         _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<bool> {
+    ) -> Result<Option<String>> {
         Err("Listening for a wake word is not available on this system yet.".into())
     }
-    /// Whether `wait_for_phrase` can work here.
+    /// Whether `wait_for_wake` can work here.
     fn hears_phrases(&self) -> bool {
         false
     }
@@ -250,6 +251,73 @@ pub struct UiElement {
 /// called and whatever the AI asks.
 pub const SECRET_FIELD: &str = "That is a password field, so Keenu leaves it to you. Type it yourself, then tell Keenu to go on.";
 
+/// Said for a system command this system has no way to carry out yet.
+pub const NOT_HERE: &str = "Keenu cannot do that on this system yet.";
+
+/// Turning a level up, down, or to a value from 0 to 100.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adjust {
+    Set(u8),
+    Up,
+    Down,
+    Mute,
+    Unmute,
+}
+
+/// Ending or pausing the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Power {
+    Sleep,
+    Restart,
+    ShutDown,
+    SignOut,
+}
+
+/// Something the assistant asks of the system itself rather than of one app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemCommand {
+    /// A window, by its id or title or app (the one in front when empty): `focus`, `close`, `minimize`, `maximize`,
+    /// `unmaximize`, or a part of the screen: `left`, `right`, `top`, `bottom`, `top_left`, `top_right`,
+    /// `bottom_left`, `bottom_right`, `center`.
+    Window {
+        window: String,
+        command: String,
+    },
+    /// Windows side by side over the screen: `halves`, `rows`, `quarters`, `thirds` or `grid`, of `apps` in order,
+    /// or of the windows in front when it is empty.
+    Arrange {
+        layout: String,
+        apps: Vec<String>,
+    },
+    Volume(Adjust),
+    Brightness(Adjust),
+    Wifi(bool),
+    Bluetooth(bool),
+    DarkMode(bool),
+    /// The system's settings at a page: `wifi`, `bluetooth`, `display`, `sound`, `notifications`, `power`,
+    /// `privacy`, `apps`, `update`, `network`, `personalization`, `mouse`, `keyboard`, `printers`, `system`.
+    Settings(String),
+    /// The whole screen, saved as a picture. Where, in words.
+    Screenshot,
+    Lock,
+    Power(Power),
+    /// Types text where the cursor is, in whatever app has it.
+    Write(String),
+    /// Puts text on the clipboard.
+    Copy(String),
+}
+
+/// Something the assistant asks to know about the system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Report {
+    /// The programs using the most processor time and memory now.
+    TopProcesses,
+    /// Battery, memory, disk space, how long it has been on, and the system's version.
+    SystemInfo,
+    /// The text on the clipboard. Never what a password manager marked as private.
+    Clipboard,
+}
+
 /// Using other apps, through the system's accessibility interface.
 pub trait AppControlProvider: Send + Sync {
     fn availability(&self) -> Availability;
@@ -271,6 +339,16 @@ pub trait AppControlProvider: Send + Sync {
     fn find_apps(&self, terms: &[String]) -> Result<Vec<String>>;
     /// Opens a file, folder or address with what the system uses for it.
     fn open_path(&self, target: &str) -> Result<()>;
+    /// Carries out a system command. What it did, in words.
+    fn system(&self, command: &SystemCommand) -> Result<String> {
+        let _ = command;
+        Err(NOT_HERE.into())
+    }
+    /// What the system says about itself, as text for the assistant.
+    fn report(&self, report: Report) -> Result<String> {
+        let _ = report;
+        Err(NOT_HERE.into())
+    }
 }
 
 /// A key combination as people write it: `ctrl+shift+s`.
@@ -310,6 +388,53 @@ impl KeyCombo {
     }
 }
 
+/// What people call the assistant to wake it, longest first so "hey keenu" is not taken for "keenu".
+pub const WAKE_PHRASES: &[&str] = &[
+    "good afternoon keenu",
+    "good morning keenu",
+    "good evening keenu",
+    "hello keenu",
+    "okay keenu",
+    "hey keenu",
+    "hi keenu",
+    "ok keenu",
+    "keenu",
+];
+
+/// Lower case, with only letters, digits and single spaces.
+fn plain_words(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What was said after a wake phrase, when `heard` starts with one: "Keenu, open Spotify" gives "open Spotify", and
+/// "Hey Keenu" gives "". `None` when it starts with none of them.
+pub fn after_wake(heard: &str, phrases: &[&str]) -> Option<String> {
+    let plain = plain_words(heard);
+    let mut phrases: Vec<String> = phrases.iter().map(|p| plain_words(p)).collect();
+    phrases.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    let phrase = phrases
+        .iter()
+        .find(|p| !p.is_empty() && (plain == **p || plain.starts_with(&format!("{p} "))))?;
+    let skip = phrase.split(' ').count();
+    let rest: Vec<&str> = heard.split_whitespace().skip(skip).collect();
+    Some(
+        rest.join(" ")
+            .trim_start_matches(|c: char| !c.is_alphanumeric())
+            .to_owned(),
+    )
+}
+
 /// `text` holds `part`, in any case; an empty `part` holds for everything.
 pub fn holds(text: &str, part: &str) -> bool {
     text.to_lowercase().contains(&part.trim().to_lowercase())
@@ -347,6 +472,25 @@ pub fn pick_element<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_request_after_a_wake_phrase_is_kept() {
+        assert_eq!(
+            after_wake("Keenu, open Spotify", WAKE_PHRASES).as_deref(),
+            Some("open Spotify")
+        );
+        assert_eq!(after_wake("Hey Keenu", WAKE_PHRASES).as_deref(), Some(""));
+        assert_eq!(
+            after_wake("good morning keenu what is on today", WAKE_PHRASES).as_deref(),
+            Some("what is on today")
+        );
+        assert_eq!(
+            after_wake("Hey, Keenu! Lock the screen", WAKE_PHRASES).as_deref(),
+            Some("Lock the screen")
+        );
+        assert_eq!(after_wake("open Spotify", WAKE_PHRASES), None);
+        assert_eq!(after_wake("Keenuish", WAKE_PHRASES), None);
+    }
 
     fn element(name: &str) -> UiElement {
         UiElement {

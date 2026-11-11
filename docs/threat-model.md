@@ -63,6 +63,10 @@
 | 30 | A connector does more than it was allowed | E | Each connector starts off; read access offers only its tools that only read; writing asks every time | The server's own description of a tool decides whether it only reads |
 | 31 | The microphone listens without the user knowing | I | "Hey Keenu" is off by default, needs the assistant and voice on, and shows a red dot on the closed island and a line on the Voice page while it listens; Windows' engine runs on this computer | |
 | 32 | Every action is logged, or nothing is | R | An action is not taken if the log cannot be written; the log has secrets removed and stays on this computer | |
+| 33 | The AI ends the session or types into the wrong app | T, D | Sleep, restart, shut down and sign out ask first, and the card says unsaved work is lost; typing at the cursor asks first, shows the text, and goes to the app the user was in, never Keenu's own island | A user who approves without reading |
+| 34 | A "check" runs something that changes or reveals | E, I | A fixed list of programs from System32 (or `/usr/bin` and the like), each with the arguments that only look; no shell, pipes, redirects or quoting; Wi-Fi keys refused; output has secrets removed. Tested | A listed program that changes behaviour in a later Windows |
+| 35 | The wake word hears Keenu's own voice, or wakes by mistake | S | Paused while Keenu speaks, listens or works; a name said alone needs more confidence than a phrase | Words that sound like "Keenu" |
+| 36 | The clipboard holds a secret the AI is shown | I | Read only when asked and approved; password managers' private copies are skipped; secrets in it removed by the redactor | A secret the redactor does not recognise |
 
 ## Out of scope, and why
 

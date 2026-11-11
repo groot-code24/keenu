@@ -40,10 +40,10 @@ use crate::uia::{
 pub struct AppControl;
 
 /// COM for this thread, for as long as it is held: callers' threads may not have it yet.
-struct ComScope(bool);
+pub(crate) struct ComScope(bool);
 
 impl ComScope {
-    fn enter() -> Self {
+    pub(crate) fn enter() -> Self {
         // SAFETY: paired with `CoUninitialize` in `drop`, on this thread, only when this call counted.
         Self(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok())
     }
@@ -64,7 +64,7 @@ fn automation() -> Result<IUIAutomation> {
         .map_err(|err| format!("Windows' UI Automation is not available: {err}"))
 }
 
-fn title_of(window: HWND) -> String {
+pub(crate) fn title_of(window: HWND) -> String {
     // SAFETY: the buffer's length goes with it.
     unsafe {
         let length = GetWindowTextLengthW(window);
@@ -78,7 +78,7 @@ fn title_of(window: HWND) -> String {
 }
 
 /// The program behind a window, without its folder or `.exe`.
-fn app_of(window: HWND) -> String {
+pub(crate) fn app_of(window: HWND) -> String {
     // SAFETY: the handle is closed below, and the buffer's length goes with it.
     unsafe {
         let mut id = 0;
@@ -125,20 +125,40 @@ fn top_windows() -> Result<Vec<HWND>> {
     Ok(list)
 }
 
+/// Whether `window` is one of Keenu's own.
+fn is_mine(window: HWND) -> bool {
+    let mut id = 0;
+    // SAFETY: only asks about a window Windows named.
+    unsafe { GetWindowThreadProcessId(window, Some(&mut id)) };
+    id == std::process::id()
+}
+
+/// Other programs' windows, front to back.
+pub(crate) fn other_windows() -> Result<Vec<HWND>> {
+    Ok(top_windows()?
+        .into_iter()
+        .filter(|w| !is_mine(*w))
+        .collect())
+}
+
 fn window_id(window: HWND) -> String {
     format!("{:x}", window.0 as usize)
 }
 
 /// The window meant: by its id, else the only one whose title or app holds `wanted`; the one in front when empty.
-fn find_window(wanted: &str) -> Result<HWND> {
+/// That is never Keenu's own island, which has the focus while the user talks to it, but what they were using.
+pub(crate) fn find_window(wanted: &str) -> Result<HWND> {
     let wanted = wanted.trim();
     if wanted.is_empty() {
         // SAFETY: only asks which window is in front.
         let front = unsafe { GetForegroundWindow() };
-        if front.is_invalid() {
-            return Err("No window is in front.".into());
+        if !front.is_invalid() && !is_mine(front) {
+            return Ok(front);
         }
-        return Ok(front);
+        return other_windows()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "No window is in front.".to_owned());
     }
     let windows = top_windows()?;
     if let Some(window) = windows.iter().find(|window| window_id(**window) == wanted) {
@@ -167,7 +187,7 @@ fn find_window(wanted: &str) -> Result<HWND> {
     }
 }
 
-fn bring_to_front(window: HWND) -> Result<()> {
+pub(crate) fn bring_to_front(window: HWND) -> Result<()> {
     // SAFETY: only acts on a window Windows named.
     unsafe {
         if IsIconic(window).as_bool() {
@@ -422,7 +442,7 @@ fn start_menu_apps() -> Vec<(String, std::path::PathBuf)> {
 }
 
 /// Hands `target` to the shell: an app's shortcut, a document, a folder or an address.
-fn shell_open(target: &std::path::Path) -> Result<()> {
+pub(crate) fn shell_open(target: &std::path::Path) -> Result<()> {
     // Explorer would read it as one of its switches.
     if target.to_string_lossy().starts_with(['/', '-']) {
         return Err("Windows could not open that.".into());
@@ -592,6 +612,14 @@ impl AppControlProvider for AppControl {
 
     fn open_path(&self, target: &str) -> Result<()> {
         shell_open(std::path::Path::new(target))
+    }
+
+    fn system(&self, command: &keenu_platform::SystemCommand) -> Result<String> {
+        crate::machine::run(command)
+    }
+
+    fn report(&self, report: keenu_platform::Report) -> Result<String> {
+        crate::machine::report(report)
     }
 }
 

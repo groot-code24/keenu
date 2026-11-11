@@ -78,7 +78,6 @@ const CREDENTIAL_VOICE: &str = "voice/api-key";
 const MAX_STEPS_SHOWN: usize = 3;
 /// How long the assistant waits for an answer before taking it as a no.
 const ASSISTANT_ASK_MS: i64 = 10 * 60 * 1000;
-const WAKE_PHRASE: &str = "hey keenu";
 const DEFAULT_SEARCH_MODEL: &str = "grok-4";
 
 /// The tone in the settings, plain if it is anything else.
@@ -165,7 +164,12 @@ enum Event {
     Assistant(Progress),
     AssistantAct(Value),
     ChatGptConnected(Result<(), String>),
-    WakeWordHeard,
+    /// What was said after it, in the same breath; empty for the name alone.
+    WakeWordHeard(String),
+    /// An answer has been read out, or was stopped; whether it asked something, so Keenu listens for the reply.
+    Spoken {
+        listen: bool,
+    },
     WakeWordFailed(String),
     Thumbnail(String, Vec<u8>),
     UpdateFound(Option<Update>, String),
@@ -680,9 +684,28 @@ impl App {
                     Err(why) => why,
                 };
             }
-            Event::WakeWordHeard => {
+            Event::Spoken { listen } => {
+                // Already false when the user talked over it, and then they are speaking already.
+                if self.speaking {
+                    self.speaking = false;
+                    if listen && self.settings.voice.enabled {
+                        self.voice_toggle();
+                    }
+                }
+            }
+            Event::WakeWordHeard(asked) => {
                 self.wake_running = false;
-                self.summon();
+                if asked.trim().is_empty() {
+                    self.summon();
+                } else {
+                    // "Keenu, open Spotify": the request is already said, so nothing more is listened for.
+                    self.platform.voice.stop_speaking();
+                    self.speaking = false;
+                    self.set_expanded(true);
+                    self.view.page = Page::Voice;
+                    self.assistant_ask(&asked);
+                    self.refresh_view();
+                }
                 self.sync_wake_word();
             }
             Event::WakeWordFailed(why) => {
@@ -845,6 +868,7 @@ impl App {
         self.deliver_due_reminders(now);
         self.deliver_notifications();
         self.run_due_tasks();
+        self.sync_wake_word();
         if now - self.last_maintained_ms >= MAINTAIN_EVERY_MS {
             self.maintain(now);
         }
@@ -1753,6 +1777,7 @@ impl App {
                                 unattended: false,
                             }));
                         }
+                        handle.send(Event::Spoken { listen });
                     });
                 } else if listen && self.settings.voice.enabled {
                     self.voice_toggle();
@@ -2013,10 +2038,14 @@ impl App {
 
     /// Starts or stops listening for the wake word, to match the setting. It listens on this computer only.
     fn sync_wake_word(&mut self) {
+        // Paused while Keenu listens, works or speaks, so it neither shares the microphone nor hears itself.
         let wanted = self.settings.assistant.enabled
             && self.settings.assistant.wake_word
             && self.settings.voice.enabled
-            && self.platform.voice.hears_phrases();
+            && self.platform.voice.hears_phrases()
+            && !self.voice_busy
+            && !self.speaking
+            && !self.platform.voice.recording();
         if !wanted {
             self.wake_stop.store(true, Ordering::Relaxed);
             self.wake_running = false;
@@ -2034,11 +2063,13 @@ impl App {
         );
         let _ = thread::Builder::new()
             .name("keenu-wake".into())
-            .spawn(move || match voice.wait_for_phrase(WAKE_PHRASE, &stop) {
-                Ok(true) => handle.send(Event::WakeWordHeard),
-                Ok(false) => {}
-                Err(why) => handle.send(Event::WakeWordFailed(why)),
-            });
+            .spawn(
+                move || match voice.wait_for_wake(keenu_platform::WAKE_PHRASES, &stop) {
+                    Ok(Some(asked)) => handle.send(Event::WakeWordHeard(asked)),
+                    Ok(None) => {}
+                    Err(why) => handle.send(Event::WakeWordFailed(why)),
+                },
+            );
     }
 
     fn assistant_rows(&self) -> Vec<ButtonRow> {
@@ -3335,8 +3366,8 @@ impl App {
                     None,
                 ),
                 switch(
-                    "Listen for Hey Keenu",
-                    "On this computer; the microphone stays open while on",
+                    "Listen for “Keenu”",
+                    "Say Keenu, Hey Keenu or Good morning Keenu, with what you want or not. On this computer; the microphone stays open while on",
                     Setting::AssistantWakeWord,
                     settings.assistant.wake_word,
                     wake_reason,
@@ -4091,6 +4122,39 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|n| n.body == "Good morning.")
+        );
+    }
+
+    #[test]
+    fn once_an_answer_is_read_out_keenu_listens_if_it_asked_something() {
+        let (mut app, _) = app("assistant-spoken");
+        app.settings.assistant.enabled = true;
+        app.settings.assistant.speak = true;
+        app.on_assistant(Progress::Done {
+            say: "Which one?".into(),
+            listen: true,
+            unattended: false,
+        });
+        assert!(app.speaking);
+        app.on_event(Event::Spoken { listen: true });
+        assert!(!app.speaking);
+        // Voice is off here, so nothing opened the microphone.
+        assert!(!app.voice_busy);
+    }
+
+    #[test]
+    fn a_request_said_with_the_wake_word_goes_straight_to_the_assistant() {
+        let (mut app, _) = app("assistant-wake");
+        app.settings.assistant.enabled = true;
+        app.settings.assistant.route = "chatgpt".into();
+        app.on_event(Event::WakeWordHeard("lock the screen".into()));
+        assert!(app.view().expanded);
+        assert_eq!(app.voice_heard, "lock the screen");
+        // Not connected in the test, so it says what to do instead of starting.
+        assert!(
+            app.voice_error.contains("Connect ChatGPT"),
+            "{}",
+            app.voice_error
         );
     }
 
