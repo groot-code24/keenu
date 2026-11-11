@@ -80,7 +80,8 @@ pub fn spawn(command: &mut Command) -> std::io::Result<Group> {
     let program = std::path::PathBuf::from(command.as_std().get_program());
     let path = path_for(&program);
     // It never gains privileges (no setuid sudo or pkexec), unless it runs from a snap, whose launcher
-    // needs them.
+    // needs them. macOS has no such switch: there it relies on the AI program's own rules.
+    #[cfg(target_os = "linux")]
     if !from_snap(&program, path.as_deref()) {
         // SAFETY: prctl is async-signal-safe and only reads its integer arguments.
         unsafe {
@@ -105,7 +106,7 @@ pub fn spawn(command: &mut Command) -> std::io::Result<Group> {
 }
 
 /// Whether `program`, or the Node it would run on, is a snap's.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn from_snap(program: &std::path::Path, path: Option<&std::ffi::OsStr>) -> bool {
     let snap = |path: &std::path::Path| {
         std::fs::canonicalize(path)

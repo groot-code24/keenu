@@ -12,7 +12,7 @@ status=${PIPESTATUS[0]}
 encode() { cut -c1-300 | tr -d '\r' | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
 
 if [ "$status" -ne 0 ]; then
-    echo "::error title=$1 failed with exit code $status (the lines that say why)::$(grep -E '^error|panicked at|FAILED|failed:|Smoke test failed|FAIL ' "$log" | head -n 40 | encode)"
+    echo "::error title=$1 failed with exit code $status (the lines that say why)::$(grep -E '^error|^ +--> |panicked at|FAILED|failed:|Smoke test failed|FAIL ' "$log" | head -n 40 | encode)"
     echo "::error title=$1 failed with exit code $status (the end of its output)::$(tail -n 50 "$log" | encode)"
 fi
 rm -f "$log"

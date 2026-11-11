@@ -435,8 +435,6 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn only_so_much_history_is_kept() {
-        assert!(MAX_HISTORY >= 2);
-    }
+    // A question and its answer at the least.
+    const _: () = assert!(MAX_HISTORY >= 2);
 }

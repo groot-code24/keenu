@@ -41,7 +41,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Lint
-        run: cargo clippy --locked -p keenu-assistant -p keenu-guard -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release --all-targets -- -D warnings
+        run: scripts/ci/logged.sh cargo clippy --locked -p keenu-assistant -p keenu-guard -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release --all-targets -- -D warnings
       - name: Test
         shell: bash
         run: scripts/ci/logged.sh cargo test --locked -p keenu-assistant -p keenu-guard -p keenu-core -p keenu-security -p keenu-integrations -p keenu-platform -p keenu-ui -p keenu-app -p keenu-release
