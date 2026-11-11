@@ -2802,12 +2802,13 @@ impl App {
                 self.settings.assistant.route = "api".into();
                 self.save_settings();
                 // Nothing to keep for a server on this computer.
-                if known_api(&self.settings.assistant.api_base).2 {
-                    self.view.input = Some(InputView {
-                        field: Field::AssistantApiKey,
-                        text: String::new(),
-                    });
-                }
+                self.view.input =
+                    known_api(&self.settings.assistant.api_base)
+                        .2
+                        .then(|| InputView {
+                            field: Field::AssistantApiKey,
+                            text: String::new(),
+                        });
             }
             Field::AssistantApiKey => {
                 if !input.text.is_empty() {
@@ -3147,6 +3148,7 @@ impl App {
             assistant: self.settings.assistant.enabled,
             steps: self.assistant_steps.clone(),
             route: self.route_words(),
+            wake_listening: self.wake_running,
         };
     }
 
@@ -4127,6 +4129,13 @@ mod tests {
         }];
         app.chosen_session = Some("s".into());
         app.assistant_act(&serde_json::json!({"type": "media", "command": "next"}));
+        // Sent from a thread of its own, so a slow app cannot hold up the island.
+        for _ in 0..100 {
+            if !mock.0.media_commands.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(*mock.0.media_commands.lock().unwrap(), [MediaCommand::Next]);
     }
 
@@ -4208,6 +4217,7 @@ mod tests {
         app.act(Action::Toggle(Setting::AssistantMemory));
         app.remember("Likes tea");
         assert!(app.paths.assistant_memory().exists());
+        app.refresh_view();
         let shown = app
             .view()
             .settings

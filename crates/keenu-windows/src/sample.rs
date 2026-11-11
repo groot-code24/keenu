@@ -262,6 +262,7 @@ pub fn view(page: &str) -> Option<View> {
                 cwd: "D:\\code\\korus".into(),
                 permissions: vec!["Bash npm run build".into()],
                 seconds_left: 287,
+                own: false,
             });
         }
         "onboarding" => {

@@ -6,6 +6,32 @@ All notable changes to Keenu, called Neeru and Isle in earlier versions, are lis
 
 ## [Unreleased]
 
+### Added
+
+On the `assistant-phases` branch, not released: see [what works where](docs/platform-support.md#the-assistant-branch-assistant-phases-not-released)
+and [the plan](docs/assistant-plan.md).
+
+- **The assistant on Windows and macOS**, off until turned on in Settings. Type or say what you want on the Voice
+  page; it answers, and can use other apps for you: list and switch windows, read what is in them, press buttons,
+  type into fields, press keys, open apps, files and addresses. Anything that changes something asks first on the
+  island's card, and every action is written to a log (`keenu --assistant-log`). Password fields are refused.
+- It answers through your ChatGPT plan (Connect ChatGPT), an API you set up (its key goes to the credential
+  store), a model on this computer, or Claude Code, Codex or Grok as you installed and signed in to them.
+- Spoken answers that stop when you press the shortcut or the microphone; Ctrl+Alt+Space on Windows and
+  Option+Space on macOS while the assistant is on; "Hey Keenu" on Windows, off by default, with a red dot on the
+  closed island while it listens.
+- Memory that is off until turned on, kept encrypted, and only of what you tell it; projects; a choice of tone; a
+  morning briefing at a time you set.
+- Connectors to MCP servers, each off until you give it read or write access.
+- New commands: `--windows-list`, `--window-read`, `--window-click`, `--window-type`, `--window-keys`,
+  `--window-close`, `--assistant-log`.
+
+### Changed
+
+- Keenu no longer reads Claude Code's, Codex's or Grok's sign-in tokens, and no longer asks their services for plan
+  usage with them. The Usage page asks you to run `/usage` in the program itself. Codex's usage still comes from its
+  own logs.
+
 ### Fixed
 
 - On Windows, a build without a publisher certificate no longer says updates are available. 2.0.0-alpha.1 says so, and

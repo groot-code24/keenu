@@ -331,6 +331,8 @@ pub struct VoiceView {
     pub steps: Vec<String>,
     /// Which AI answers.
     pub route: String,
+    /// The microphone is open for "Hey Keenu", on this computer.
+    pub wake_listening: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -692,6 +694,14 @@ fn compact(frame: &mut Frame, view: &View) {
         );
     } else {
         frame.text(body, view.date.as_str(), style(12.0, MUTED));
+    }
+    // The microphone is open: for a recording, or for "Hey Keenu".
+    if view.voice.recording || view.voice.wake_listening {
+        frame.fill(
+            Rect::new(COMPACT_W - time_w - 22.0, 13.0, 8.0, 8.0),
+            4.0,
+            DANGER,
+        );
     }
     frame.text(
         Rect::new(COMPACT_W - time_w - 12.0, 7.0, time_w, 20.0),
@@ -1250,6 +1260,8 @@ fn voice_page(frame: &mut Frame, view: &View, body: Rect) {
         "Recording. Click to stop."
     } else if voice.busy {
         "Working..."
+    } else if voice.wake_listening {
+        "Listening for “Hey Keenu”, on this computer. Or click to speak"
     } else {
         "Click to speak"
     };
@@ -1875,6 +1887,29 @@ mod tests {
         let scene = build(&view);
         assert!(!has_action(&scene, &Action::VoiceToggle));
         assert!(has_text(&scene, "Voice is off"));
+    }
+
+    #[test]
+    fn the_closed_island_shows_when_the_microphone_is_open() {
+        let red_dot = |voice: VoiceView| {
+            let scene = build(&View {
+                voice,
+                ..View::default()
+            });
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Fill { color, .. } if *color == DANGER))
+        };
+        assert!(!red_dot(VoiceView::default()));
+        assert!(red_dot(VoiceView {
+            recording: true,
+            ..VoiceView::default()
+        }));
+        assert!(red_dot(VoiceView {
+            wake_listening: true,
+            ..VoiceView::default()
+        }));
     }
 
     #[test]

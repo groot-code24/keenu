@@ -98,17 +98,17 @@ pub unsafe trait IUIAutomationCondition: IUnknown {}
 
 #[interface("fb377fbe-8ea6-46d5-9c73-6499642d3059")]
 pub unsafe trait IUIAutomationInvokePattern: IUnknown {
-    fn Invoke(&self) -> HRESULT;
+    pub fn Invoke(&self) -> HRESULT;
 }
 
 #[interface("94cf8058-9b8d-4ab9-8bfd-4cd0a33c8c70")]
 pub unsafe trait IUIAutomationTogglePattern: IUnknown {
-    fn Toggle(&self) -> HRESULT;
+    pub fn Toggle(&self) -> HRESULT;
 }
 
 #[interface("a8efa66a-0fda-421a-9194-38021f3578ea")]
 pub unsafe trait IUIAutomationSelectionItemPattern: IUnknown {
-    fn Select(&self) -> HRESULT;
+    pub fn Select(&self) -> HRESULT;
 }
 
 #[interface("a94cd8b1-0844-4cd6-9d2d-640537ab39e9")]

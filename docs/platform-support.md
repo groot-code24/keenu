@@ -61,6 +61,24 @@ Official Windows releases are built with MSVC by CI. The real desktop runs above
 | Screen reader | Not yet: regions have names, but they are not exposed to UI Automation | Through GNOME | Not yet |
 | Keyboard | Tested by real key messages | Existing | Not yet |
 
+### The assistant (branch `assistant-phases`, not released)
+
+| Feature | Windows | Linux with GNOME | macOS |
+|---|---|---|---|
+| Listing windows, reading their controls, pressing, typing, keys, closing | Smoke test on GitHub's Windows drives a real window, password box included | keenud's own window commands; reading controls (AT-SPI) **not yet** | Compiles. Needs the Accessibility permission, which CI cannot give |
+| Refusing password fields | Tested on a real password box | Not applicable yet | Compiles |
+| Agent loop, approvals on the card, action log | Mock-tested with a fake AI | Existing on keenud, unchanged tests | Mock-tested |
+| ChatGPT sign-in and answers | Mock-tested against a fake OpenAI. **Never tried with a real account** | Not yet | As Windows |
+| An API (OpenAI-, Anthropic-compatible, local) | Mock-tested | Not yet | Mock-tested |
+| Claude Code, Codex, Grok as the AI | **Not run** with the real programs | Existing | **Not run** |
+| Spoken answers, and stopping them | Compiles; needs a person | Existing | Compiles; needs a person |
+| "Hey Keenu" | Compiles; needs a person with a microphone and a Windows speech language | Not yet | Not yet |
+| Shortcut: Ctrl+Alt+Space, Option+Space | Compiles; needs a person | Super+I, existing | Compiles; needs a person |
+| Memory, projects, tone | Unit-tested, encryption included | Not yet | Unit-tested |
+| Morning briefing, tasks | Unit-tested | Not yet | Unit-tested |
+| MCP connectors | Mock-tested against a fake server over HTTP | Not yet | Mock-tested |
+| Web search through xAI | Mock-tested. **Never tried with a real key** | Not yet | As Windows |
+
 ## Limits that are the system's
 
 - **macOS** has no public API for every app's now-playing information. Keenu can only ask apps with a scripting

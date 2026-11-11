@@ -2,6 +2,16 @@
 
 **Status: a proposal. None of this is built, except where "Keenu today" says so.** Written 2026-10-31.
 
+**Update, 2026-11-11:** a first version of phases 0 to 4 is on the `assistant-phases` branch, not released. It
+is a prototype, built and tested by CI with fake AI services, not finished phases: no real account, microphone or
+Mac user has tried it, and the "finished when" tests in [section 9](#9-build-order) have not been run. What it
+covers on each system is in [what works where](platform-support.md#the-assistant-branch-assistant-phases-not-released).
+Left out so far: Linux's ChatGPT and API routes, memory and briefing, and reading other apps' controls on Linux;
+listening on macOS; stopping speech by talking over it; real-time voice; built-in Gmail, Drive, Notion and Dropbox
+connectors (they need OAuth clients registered under the project's name). Memory, the schedule and connectors are
+modules of `keenu-assistant`, not crates of their own as section 7 proposed. What would change after phase 4 is in
+[after-phase-4-improvements.md](after-phase-4-improvements.md).
+
 The goal is for Keenu to do what Jarvis, Grok and Muse do, on the user's own computer, with the AI account they already
 have. This plan lists every feature found in those products, how Keenu would get each one, and the order to build them.
 

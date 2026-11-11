@@ -53,6 +53,16 @@
 | 20 | Editing an agent's settings loses the user's data | T | Refuses invalid JSON; keeps other keys in order; atomic; backup; restored on failure | |
 | 21 | Editing a calendar event loses attendees or alarms | T | The server's object is fetched and only known fields replaced. **Found in testing** | |
 | 22 | Migration overwrites or loses data | T | Copies; never overwrites; old folder untouched; logged | |
+| 23 | Text in a window, file, web result or connector tells the assistant to do something (prompt injection) | E, I | Everything read is handed to the AI marked as data, not instructions; the AI can only propose actions, and Keenu's own code grades each one: looking runs, anything that changes something asks on the island card, and a fixed list is refused outright | A user who approves without reading. The card shows the action in Keenu's words, not the AI's |
+| 24 | The AI clicks or types in the wrong window | T | A window is picked by its id, or by a title only one window has; "more than one could be" is an error; each click and keystroke asks first and names the window | A window that changes between the card and the click |
+| 25 | The assistant reads or fills a password field | I | Refused in platform code by what the system says the field is (UI Automation's IsPassword, macOS's AXSecureTextField), not by its name; its value is never asked for. Tested on a real password box by the Windows smoke test | An app that draws its own password field without telling the system |
+| 26 | A scheduled task acts while nobody is there | E | A request with no one at the computer can only look: anything that would ask is refused and reported | |
+| 27 | A forged ChatGPT sign-in redirect, or a stolen code | S, I | As 10 and 11: random state and nonce, PKCE, a loopback address on 127.0.0.1 only, one sign-in at a time | |
+| 28 | An API key, ChatGPT token or connector token leaks | I | Kept only in the credential store; never in settings, the action log or the conversation; an API address must be HTTPS unless it is on this computer | A key the user pastes into a request: Keenu cannot tell it from text |
+| 29 | Someone with the user's files reads the assistant's memory | I | Encrypted with ChaCha20-Poly1305; the key is in the credential store, not beside the file | Anyone signed in as the user can open the credential store too |
+| 30 | A connector does more than it was allowed | E | Each connector starts off; read access offers only its tools that only read; writing asks every time | The server's own description of a tool decides whether it only reads |
+| 31 | The microphone listens without the user knowing | I | "Hey Keenu" is off by default, needs the assistant and voice on, and shows a red dot on the closed island and a line on the Voice page while it listens; Windows' engine runs on this computer | |
+| 32 | Every action is logged, or nothing is | R | An action is not taken if the log cannot be written; the log has secrets removed and stays on this computer | |
 
 ## Out of scope, and why
 
