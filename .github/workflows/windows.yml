@@ -43,7 +43,8 @@ jobs:
       - name: Test against real Windows APIs
         if: ${{ !matrix.build_only }}
         shell: bash
-        run: scripts/ci/logged.sh cargo test --locked -p keenu-windows -p keenu-app -p keenu-security -p keenu-assistant -p keenu-guard -p keenu-platform
+        # One test at a time: they share one desktop, clipboard and COM, and a crash then names its test.
+        run: scripts/ci/logged.sh cargo test --locked -p keenu-windows -p keenu-app -p keenu-security -p keenu-assistant -p keenu-guard -p keenu-platform -- --test-threads=1
       - name: Build
         env:
           KEENU_SIGNING_THUMBPRINT: ${{ vars.KEENU_SIGNING_THUMBPRINT }}
