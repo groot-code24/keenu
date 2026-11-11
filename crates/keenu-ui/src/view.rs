@@ -90,6 +90,8 @@ pub enum Setting {
     AssistantSpeak,
     AssistantWakeWord,
     AssistantMemory,
+    AssistantConversation,
+    AssistantSeeScreen,
 }
 
 /// Text the user can type, one at a time.
@@ -216,6 +218,9 @@ pub enum Action {
     OpenActionLog,
     NextConnectorAccess(usize),
     RemoveConnector(usize),
+    AddGmailAccount,
+    AddOutlookMailAccount,
+    RemoveMailAccount(usize),
     OnboardingNext,
     OnboardingSkip,
     SelectMonitor,

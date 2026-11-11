@@ -67,6 +67,11 @@
 | 34 | A "check" runs something that changes or reveals | E, I | A fixed list of programs from System32 (or `/usr/bin` and the like), each with the arguments that only look; no shell, pipes, redirects or quoting; Wi-Fi keys refused; output has secrets removed. Tested | A listed program that changes behaviour in a later Windows |
 | 35 | The wake word hears Keenu's own voice, or wakes by mistake | S | Paused while Keenu speaks, listens or works; a name said alone needs more confidence than a phrase | Words that sound like "Keenu" |
 | 36 | The clipboard holds a secret the AI is shown | I | Read only when asked and approved; password managers' private copies are skipped; secrets in it removed by the redactor | A secret the redactor does not recognise |
+| 37 | A picture of the screen shows a secret to the AI | I | Taken only when the assistant asks and the user allows it (or turned on looking without asking); never saved by Keenu beyond the one file an AI program opens | Whatever is on the screen when allowed: pictures cannot be redacted |
+| 38 | The AI clicks something it should not | T, E | Every click, scroll and drag asks, with where it is; a target named like a payment or password is refused; positions outside the picture are refused | A user who approves without looking |
+| 39 | A page or email tells the AI to send what it read elsewhere | I, T | Page and mail text is marked as data; sending a message or email always asks and shows what goes where; a page address long enough to carry data asks first; pages on the local network are never fetched | A short address that still carries something |
+| 40 | A message goes to the wrong person | T | Only a phone number with its country code or a Telegram username; the card shows both; without the app installed nothing is sent | A wrong number the user approves |
+| 41 | A plan's chance looks surer than it is | R | The AI's estimate and the record's are shown apart; the record says how many actions it rests on, and that there is none when there is none | Few earlier actions |
 
 ## Out of scope, and why
 

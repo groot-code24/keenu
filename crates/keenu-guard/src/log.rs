@@ -33,6 +33,9 @@ pub struct Entry {
     pub at_ms: i64,
     pub request: String,
     pub level: Level,
+    /// What kind of action it was, as the assistant names it (`open_app`); empty in lines from before it was kept.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
     pub action: String,
     pub outcome: Outcome,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -138,6 +141,7 @@ mod tests {
             at_ms: 1,
             request: "send it".into(),
             level: Level::Change,
+            kind: "click".into(),
             action: action.into(),
             outcome: Outcome::Done,
             detail: String::new(),
@@ -188,6 +192,22 @@ mod tests {
         log.add(&entry("after")).unwrap();
         assert!(fs::metadata(log.path()).unwrap().len() < MAX_BYTES);
         assert_eq!(log.newest(1)[0].action, "after");
+    }
+
+    #[test]
+    fn lines_from_before_the_kind_was_kept_still_read() {
+        let log = scratch("old");
+        fs::create_dir_all(log.path().parent().unwrap()).unwrap();
+        fs::write(
+            log.path(),
+            "{\"at_ms\":1,\"request\":\"r\",\"level\":\"look\",\"action\":\"a\",\"outcome\":\"done\"}\n",
+        )
+        .unwrap();
+        let read = log.newest(1);
+        assert_eq!(read.len(), 1);
+        assert!(read[0].kind.is_empty());
+        log.add(&entry("new")).unwrap();
+        assert_eq!(log.newest(1)[0].kind, "click");
     }
 
     #[test]

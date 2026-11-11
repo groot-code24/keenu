@@ -16,6 +16,8 @@ use crate::answer::Answer;
 
 /// The AI may take this many more steps after its first answer before what it says stands.
 pub const MAX_STEPS: usize = 12;
+/// As many once it is working through a plan, whose steps each take a few.
+pub const MAX_PLAN_STEPS: usize = 40;
 /// One answer taking longer than this has failed (its own web searches included; most take 5 to 30 s,
 /// research with several searches longer).
 const ASK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -26,6 +28,10 @@ const SLOW_ACTIONS: &[(&str, Duration)] = &[
     ("open_app", Duration::from_secs(6)),
     ("close_app", Duration::from_secs(4)),
     ("play_music", Duration::from_secs(13)),
+    // The chat opens, then Send is pressed (see desktop.rs).
+    ("send_message", Duration::from_secs(12)),
+    ("mail_send", Duration::from_secs(30)),
+    ("mail_draft", Duration::from_secs(30)),
     // The user is asked first (Run or Deny), and may take a while; unanswered, it denies itself.
     ("run", APPROVAL),
 ];
@@ -221,7 +227,16 @@ pub async fn think(
     let mut checks = Vec::new();
     let mut ran = Vec::new();
     let mut nudged = false;
-    for _ in 0..MAX_STEPS {
+    let mut taken = 0;
+    loop {
+        let planning = used
+            .iter()
+            .any(|kind| kind == "plan" || kind == "plan_step");
+        let limit = if planning { MAX_PLAN_STEPS } else { MAX_STEPS };
+        if taken >= limit {
+            break;
+        }
+        taken += 1;
         // Nothing passes without the guard, and what it stops goes back to the AI as why.
         let mut stopped = Vec::new();
         let mut allowed = Vec::new();

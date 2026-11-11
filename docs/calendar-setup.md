@@ -62,6 +62,25 @@ Scopes requested: `offline_access User.Read Calendars.ReadWrite`.
 > The requests have been tested against mock servers. See the
 > [acceptance matrix](feature-acceptance-matrix.md).
 
+## Mail for the assistant
+
+The assistant can use a Gmail or Outlook account: search and read mail, keep drafts, and send, which asks you each
+time. It uses the same client IDs as the calendars, with its own sign-in: Settings → Assistant → **Mail** →
+**Gmail** or **Outlook**. Nothing is signed in for mail until you press one.
+
+- **Gmail**: enable the **Gmail API** in the same Google Cloud project. Scope requested:
+  `https://www.googleapis.com/auth/gmail.modify` (read, label, draft and send; never delete for good). Google counts
+  it as restricted: for your own use, keep the consent screen in testing with yourself as a test user. Google then
+  asks you to sign in again every seven days.
+- **Outlook**: in the same app registration, under **API permissions**, add the delegated Microsoft Graph
+  permissions `Mail.ReadWrite` and `Mail.Send`. Scopes requested: `offline_access User.Read Mail.ReadWrite
+  Mail.Send`.
+
+Removing a mail account deletes its sign-in from this computer. To withdraw the access at Google's or Microsoft's end
+as well, use your account's security page.
+
+> Mail has been tested against the message formats only, never with a real account.
+
 ## What it does
 
 - Shows the next two weeks on the Calendar page, from a copy kept on your computer, so it works offline.

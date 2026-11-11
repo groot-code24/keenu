@@ -57,6 +57,19 @@ A screenshot the assistant takes is saved in your Pictures\Screenshots folder (D
 it is not sent to the AI. The clipboard is read only when you ask about it, after you allow it on the card, and
 never what a password manager marked as private.
 
+When you ask the assistant to look at the screen, a picture of it goes to the AI you connected, after you allow it
+(or without asking, if you turned on **See the screen without asking**). With an AI in its own program (Claude Code,
+Codex, Grok), the picture is saved as `keenu-screen.png` in Keenu's assistant folder for that program to open, and the
+next picture replaces it. Keenu keeps no other copy. Clicking on the screen always asks.
+
+Plans and notes are files in your Documents (Keenu Plans, Keenu Notes) and a list of plans in Keenu's data folder.
+Nothing in them leaves the computer, except what the assistant reads back to the AI you connected while it works.
+
+Web pages the assistant reads are fetched from this computer, as your browser would; pages on your own network are
+never fetched. A message to WhatsApp or Telegram goes through those apps, after you allow it. Mail is reached only
+through an account you connect for it in Settings; what the assistant reads of it goes to the AI you connected, and
+sending asks you each time.
+
 ## Coding agents
 
 When you connect Claude Code or Codex, their permission requests show on the island. The command and folder are

@@ -19,7 +19,10 @@ use keenu_assistant::desktop::{
     AppActions, Approver, Asking, DesktopTools, HostBrain, LiveSearch, serve_desk,
 };
 use keenu_assistant::instructions::{self, Tone};
+use keenu_assistant::mail::MailAccount;
 use keenu_assistant::memory::Memory;
+use keenu_assistant::notes::Notes;
+use keenu_assistant::plan::Plans;
 use keenu_guard::{ActionLog, Policy};
 use keenu_platform::AppControlProvider;
 use keenu_security::credentials::CredentialStore;
@@ -160,6 +163,7 @@ pub struct Job {
     pub connectors: Connectors,
     pub unattended: bool,
     pub x_model: String,
+    pub mail: Vec<MailAccount>,
 }
 
 /// The way to the worker.
@@ -192,6 +196,8 @@ pub struct Fixed {
     pub system: &'static str,
     pub app_actions: AppActions,
     pub sink: Arc<dyn Fn(Progress) + Send + Sync>,
+    pub plans: Plans,
+    pub notes: Notes,
 }
 
 struct Warm {
@@ -335,6 +341,7 @@ async fn run_job(
         connectors,
         unattended,
         x_model,
+        mail,
     } = job;
     let connector_list = connector_tools(fixed, &connectors);
     let project_pair = (!project.is_empty()).then_some((project.as_str(), project_notes.as_str()));
@@ -366,10 +373,28 @@ async fn run_job(
     };
 
     let memory = fixed.memory.lock().ok().and_then(|memory| memory.clone());
-    let memory_text = memory
-        .as_ref()
-        .and_then(|memory| memory.lock().ok().map(|m| m.for_prompt(&said, &project)))
-        .unwrap_or_default();
+    let memory_text = format!(
+        "{}{}",
+        fixed.plans.for_prompt(),
+        memory
+            .as_ref()
+            .and_then(|memory| memory.lock().ok().map(|m| m.for_prompt(&said, &project)))
+            .unwrap_or_default()
+    );
+    // An AI over its API is shown a picture of the screen itself; one in its own program opens the file.
+    let vision = match &route {
+        Route::Api { wire, base, model } => Some(api_route(fixed, *wire, base, model)),
+        Route::ChatGpt => {
+            let store = fixed.credentials.clone();
+            tokio::task::spawn_blocking(move || {
+                chatgpt::route(store, chatgpt::Endpoints::default(), "")
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+        }
+        Route::Cli(_) => None,
+    };
     let now = chrono::Local::now().format("%A %Y-%m-%d %H:%M").to_string();
     let wanted = match said.strip_prefix("research ") {
         Some(topic) => instructions::research_request(topic),
@@ -411,6 +436,12 @@ async fn run_job(
         reports: fixed.reports.clone(),
         request: Mutex::new(said),
         unattended,
+        vision,
+        pictures: fixed.workspace.clone(),
+        last_picture: Mutex::new(None),
+        plans: fixed.plans.clone(),
+        notes: fixed.notes.clone(),
+        mail,
     });
 
     let (desk, handed) = tokio::sync::mpsc::unbounded_channel();

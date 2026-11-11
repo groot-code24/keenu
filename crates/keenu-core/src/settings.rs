@@ -36,6 +36,14 @@ pub struct AssistantSettings {
     pub project: String,
     /// When to give a morning briefing ("07:30"); empty for never.
     pub briefing: String,
+    /// After an answer read aloud, listen for the reply, as in a conversation, until the user says nothing or
+    /// thanks it.
+    pub conversation: bool,
+    /// Let the assistant look at the screen when it needs to without asking each time. The picture goes to the AI the
+    /// user connected; clicking on the screen still asks.
+    pub see_screen: bool,
+    /// Mail accounts the assistant may use. Their sign-ins are in the credential store, never here.
+    pub mail_accounts: Vec<CalendarAccount>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

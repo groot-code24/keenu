@@ -305,6 +305,60 @@ pub enum SystemCommand {
     Write(String),
     /// Puts text on the clipboard.
     Copy(String),
+    /// The pointer, at a place on the screen in the system's own pointer coordinates (see `ScreenPicture`).
+    Pointer {
+        x: i32,
+        y: i32,
+        action: PointerAction,
+    },
+}
+
+/// What the pointer does where it is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerAction {
+    Click,
+    DoubleClick,
+    RightClick,
+    /// Only goes there, as hovering does.
+    Move,
+    /// Turns the wheel this many notches: up when more than 0.
+    Scroll(i32),
+    /// Holds the button down there and lets go at this place.
+    DragTo(i32, i32),
+}
+
+/// Pictures for the assistant are made no wider than this: enough to read a screen, small enough to send.
+pub const PICTURE_WIDTH: u32 = 1600;
+
+/// A picture of the screen for the assistant to look at, and where on the screen it was taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenPicture {
+    /// The picture, as PNG.
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// The part of the screen it shows, in the system's pointer coordinates: x, y, width, height.
+    pub screen: (i32, i32, i32, i32),
+}
+
+impl ScreenPicture {
+    /// Where a point of the picture is on the screen; `None` outside the picture.
+    pub fn to_screen(&self, x: i32, y: i32) -> Option<(i32, i32)> {
+        if self.width == 0 || self.height == 0 || x < 0 || y < 0 {
+            return None;
+        }
+        let (px, py) = (u32::try_from(x).ok()?, u32::try_from(y).ok()?);
+        if px >= self.width || py >= self.height {
+            return None;
+        }
+        let (left, top, wide, high) = self.screen;
+        let scale =
+            |at: u32, of: u32, span: i32| (i64::from(at) * i64::from(span) / i64::from(of)) as i32;
+        Some((
+            left + scale(px, self.width, wide),
+            top + scale(py, self.height, high),
+        ))
+    }
 }
 
 /// Something the assistant asks to know about the system.
@@ -347,6 +401,10 @@ pub trait AppControlProvider: Send + Sync {
     /// What the system says about itself, as text for the assistant.
     fn report(&self, report: Report) -> Result<String> {
         let _ = report;
+        Err(NOT_HERE.into())
+    }
+    /// A picture of the screen, no wider than `PICTURE_WIDTH`, for the assistant to look at. Nothing is saved.
+    fn capture_screen(&self) -> Result<ScreenPicture> {
         Err(NOT_HERE.into())
     }
 }
@@ -472,6 +530,27 @@ pub fn pick_element<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_point_in_a_smaller_picture_is_found_on_the_screen() {
+        // A 3200×1800 desktop that starts left of the main screen, pictured at half its size.
+        let picture = ScreenPicture {
+            png: Vec::new(),
+            width: 1600,
+            height: 900,
+            screen: (-1280, 0, 3200, 1800),
+        };
+        assert_eq!(picture.to_screen(0, 0), Some((-1280, 0)));
+        assert_eq!(picture.to_screen(800, 450), Some((320, 900)));
+        assert_eq!(picture.to_screen(1599, 899), Some((1918, 1798)));
+        assert_eq!(picture.to_screen(1600, 10), None);
+        assert_eq!(picture.to_screen(-1, 10), None);
+        let empty = ScreenPicture {
+            width: 0,
+            ..picture
+        };
+        assert_eq!(empty.to_screen(0, 0), None);
+    }
 
     #[test]
     fn the_request_after_a_wake_phrase_is_kept() {

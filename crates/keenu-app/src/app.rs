@@ -18,7 +18,10 @@ use chrono::{DateTime, Local, TimeZone};
 use keenu_assistant::chatgpt;
 use keenu_assistant::connectors::Connectors;
 use keenu_assistant::instructions::Tone;
+use keenu_assistant::mail::{MailAccount, MailKind};
 use keenu_assistant::memory::Memory;
+use keenu_assistant::notes::Notes;
+use keenu_assistant::plan::Plans;
 use keenu_assistant::schedule::{self, Repeat, Schedule};
 use keenu_core::clipboard::{Clip, ClipboardHistory};
 use keenu_core::file_shelf::{self, AddError, FileShelf};
@@ -155,6 +158,8 @@ enum Event {
     Notify(Notification),
     CalendarDone(String, Box<AccountCache>, Result<(), String>),
     AccountAdded(CalendarAccount),
+    /// A mail account the assistant may use, signed in.
+    MailAccountAdded(CalendarAccount),
     AccountFailed(String),
     VoiceHeard(String),
     VoiceAnswer(String),
@@ -659,6 +664,14 @@ impl App {
                 self.save_settings();
                 self.caches.entry(id.clone()).or_default();
                 self.sync_account(&id);
+            }
+            Event::MailAccountAdded(account) => {
+                self.view.status = format!(
+                    "Connected {}. The assistant can read and draft mail; sending asks you first.",
+                    account.label
+                );
+                self.settings.assistant.mail_accounts.push(account);
+                self.save_settings();
             }
             Event::AccountFailed(why) => self.view.status = why,
             Event::VoiceHeard(text) => self.voice_heard = text,
@@ -1176,8 +1189,11 @@ impl App {
     fn add_oauth_account(&mut self, kind: &'static str) {
         let (provider, setup) = match kind {
             "google" => (google::provider(), "KEENU_GOOGLE_CLIENT_ID"),
+            "gmail" => (google::mail_provider(), "KEENU_GOOGLE_CLIENT_ID"),
+            "outlook" => (graph::mail_provider(), "KEENU_MICROSOFT_CLIENT_ID"),
             _ => (graph::provider(), "KEENU_MICROSOFT_CLIENT_ID"),
         };
+        let for_mail = matches!(kind, "gmail" | "outlook");
         let Some(provider) = provider else {
             self.view.status =
                 format!("This build has no client ID: set {setup}. See docs/calendar-setup.md.");
@@ -1212,17 +1228,61 @@ impl App {
             };
             let id = format!("{kind}-{random}");
             let source = TokenSource::new(provider.clone(), credentials, credential_key(&id));
+            let account = CalendarAccount {
+                id,
+                provider: kind.to_owned(),
+                label: provider.name.to_owned(),
+                server: String::new(),
+                username: String::new(),
+            };
             match source.save(&tokens) {
-                Ok(()) => handle.send(Event::AccountAdded(CalendarAccount {
-                    id,
-                    provider: kind.to_owned(),
-                    label: provider.name.to_owned(),
-                    server: String::new(),
-                    username: String::new(),
-                })),
+                Ok(()) if for_mail => handle.send(Event::MailAccountAdded(account)),
+                Ok(()) => handle.send(Event::AccountAdded(account)),
                 Err(why) => handle.send(Event::AccountFailed(why.to_string())),
             }
         });
+    }
+
+    fn remove_mail_account(&mut self, index: usize) {
+        if index >= self.settings.assistant.mail_accounts.len() {
+            return;
+        }
+        let account = self.settings.assistant.mail_accounts.remove(index);
+        let _ = self
+            .platform
+            .credentials
+            .delete(&credential_key(&account.id));
+        self.save_settings();
+        self.view.status = format!(
+            "Removed {}. To withdraw Keenu's access at its end too, see your account's security page.",
+            account.label
+        );
+    }
+
+    /// The mail accounts the user connected, for the assistant.
+    fn mail_for_assistant(&self) -> Vec<MailAccount> {
+        self.settings
+            .assistant
+            .mail_accounts
+            .iter()
+            .filter_map(|account| {
+                let (kind, provider) = match account.provider.as_str() {
+                    "gmail" => (MailKind::Gmail, google::mail_provider()?),
+                    "outlook" => (MailKind::Outlook, graph::mail_provider()?),
+                    _ => return None,
+                };
+                let source = TokenSource::new(
+                    provider,
+                    self.platform.credentials.clone(),
+                    credential_key(&account.id),
+                );
+                Some(MailAccount {
+                    label: account.label.clone(),
+                    kind,
+                    token: Arc::new(move || source.access_token().map_err(|why| why.to_string())),
+                })
+            })
+            .collect()
     }
 
     fn remove_account(&mut self, index: usize) {
@@ -1592,16 +1652,20 @@ impl App {
         }
         let sink_handle = self.handle();
         let act_handle = self.handle();
+        let documents = dirs::document_dir().unwrap_or_else(|| self.paths.root.clone());
         let assistant = assistant::start(Fixed {
             control: self.platform.control.clone(),
             credentials: self.platform.credentials.clone(),
             memory: self.memory.clone(),
             log: self.action_log.clone(),
             workspace: self.paths.assistant_workspace(),
-            reports: dirs::document_dir()
-                .unwrap_or_else(|| self.paths.root.clone())
-                .join("Keenu Reports"),
+            reports: documents.join("Keenu Reports"),
             system: if cfg!(windows) { "Windows" } else { "macOS" },
+            plans: Plans::new(
+                self.paths.root.join("plans.json"),
+                documents.join("Keenu Plans"),
+            ),
+            notes: Notes::new(documents.join("Keenu Notes")),
             // These live on the app's own thread: handed over, and done by the next tick.
             app_actions: Arc::new(move |action| {
                 let known = ["remind", "add_event", "media"];
@@ -1667,7 +1731,9 @@ impl App {
             tone: tone_of(&self.settings),
             policy: Policy {
                 ask_for_everything: settings.ask_for_everything,
+                see_screen: settings.see_screen,
             },
+            mail: self.mail_for_assistant(),
             project: settings.project.clone(),
             project_notes: notes,
             agenda: agenda.join("\n"),
@@ -1767,6 +1833,10 @@ impl App {
                 self.voice_busy = false;
                 self.assistant_steps.clear();
                 self.voice_answer = say.clone();
+                // In a conversation, Keenu listens for the reply unless the user has just ended it.
+                let listen = listen
+                    || (self.settings.assistant.conversation
+                        && !ends_conversation(&self.voice_heard));
                 if self.settings.assistant.speak && !say.is_empty() {
                     self.speaking = true;
                     let (voice, handle) = (self.platform.voice.clone(), self.handle());
@@ -2165,6 +2235,26 @@ impl App {
             });
         }
         rows.push(ButtonRow {
+            text: format!(
+                "Mail: {}",
+                if settings.mail_accounts.is_empty() {
+                    "none connected"
+                } else {
+                    "the assistant can read, draft and (asking first) send"
+                }
+            ),
+            buttons: vec![
+                ("Gmail".to_owned(), Action::AddGmailAccount),
+                ("Outlook".to_owned(), Action::AddOutlookMailAccount),
+            ],
+        });
+        for (index, account) in settings.mail_accounts.iter().enumerate() {
+            rows.push(ButtonRow {
+                text: account.label.clone(),
+                buttons: vec![("Remove".to_owned(), Action::RemoveMailAccount(index))],
+            });
+        }
+        rows.push(ButtonRow {
             text: "What the assistant did".to_owned(),
             buttons: vec![("Open log".to_owned(), Action::OpenActionLog)],
         });
@@ -2287,6 +2377,9 @@ impl App {
             }
             Action::AddGoogleAccount => self.add_oauth_account("google"),
             Action::AddMicrosoftAccount => self.add_oauth_account("microsoft"),
+            Action::AddGmailAccount => self.add_oauth_account("gmail"),
+            Action::AddOutlookMailAccount => self.add_oauth_account("outlook"),
+            Action::RemoveMailAccount(index) => self.remove_mail_account(index),
             Action::RemoveAccount(index) => self.remove_account(index),
             Action::DeleteEvent(index) => self.delete_event(index),
             Action::SyncCalendars => {
@@ -2625,6 +2718,12 @@ impl App {
             Setting::AssistantMemory => {
                 self.settings.assistant.memory = !self.settings.assistant.memory;
                 self.open_memory();
+            }
+            Setting::AssistantConversation => {
+                self.settings.assistant.conversation = !self.settings.assistant.conversation
+            }
+            Setting::AssistantSeeScreen => {
+                self.settings.assistant.see_screen = !self.settings.assistant.see_screen
             }
             Setting::ClaudeHooks => self.toggle_hooks(Agent::Claude),
             Setting::CodexHooks => self.toggle_hooks(Agent::Codex),
@@ -3379,6 +3478,20 @@ impl App {
                     settings.assistant.memory,
                     None,
                 ),
+                switch(
+                    "Keep the conversation going",
+                    "After an answer read aloud, Keenu listens for your reply, until you say nothing or thanks",
+                    Setting::AssistantConversation,
+                    settings.assistant.conversation,
+                    None,
+                ),
+                switch(
+                    "See the screen without asking",
+                    "When it needs to look, a picture of the screen goes to the AI you connected; clicking still asks",
+                    Setting::AssistantSeeScreen,
+                    settings.assistant.see_screen,
+                    None,
+                ),
             ],
             assistant_rows: self.assistant_rows(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -3442,6 +3555,38 @@ impl App {
 const ONBOARDING_STEPS: usize = 3;
 
 /// An action's name for the log, without the ids or text it may carry.
+/// Whether `said` ends a conversation: thanks, goodbye, that's all.
+fn ends_conversation(said: &str) -> bool {
+    const ENDINGS: &[&str] = &[
+        "thanks",
+        "thank you",
+        "that's all",
+        "that is all",
+        "that's it",
+        "stop",
+        "bye",
+        "goodbye",
+        "good night",
+        "nothing",
+        "never mind",
+        "no thanks",
+        "no thank you",
+    ];
+    let said: String = said
+        .to_lowercase()
+        .replace('\u{2019}', "'")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
+        .collect();
+    let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    said.split_whitespace().count() <= 5
+        && ENDINGS.iter().any(|end| {
+            said == *end
+                || said.starts_with(&format!("{end} "))
+                || said.ends_with(&format!(" {end}"))
+        })
+}
+
 fn action_name(action: &Action) -> String {
     let debug = format!("{action:?}");
     debug
@@ -4140,6 +4285,49 @@ mod tests {
         assert!(!app.speaking);
         // Voice is off here, so nothing opened the microphone.
         assert!(!app.voice_busy);
+    }
+
+    #[test]
+    fn a_conversation_goes_on_until_the_user_ends_it() {
+        for ending in [
+            "Thanks",
+            "thank you keenu",
+            "OK, that’s all",
+            "Bye!",
+            "no thanks",
+        ] {
+            assert!(ends_conversation(ending), "{ending}");
+        }
+        for going_on in [
+            "and the weather tomorrow?",
+            "stop the music and open Spotify then play my liked songs",
+            "thanksgiving plans",
+        ] {
+            assert!(!ends_conversation(going_on), "{going_on}");
+        }
+    }
+
+    #[test]
+    fn mail_and_the_new_switches_show_in_the_assistant_settings() {
+        let (mut app, _) = app("assistant-mail");
+        app.settings.assistant.enabled = true;
+        let rows = app.assistant_rows();
+        assert!(rows.iter().any(|row| row.text == "Mail: none connected"));
+        app.on_event(Event::MailAccountAdded(CalendarAccount {
+            id: "gmail-1".into(),
+            provider: "gmail".into(),
+            label: "Gmail".into(),
+            server: String::new(),
+            username: String::new(),
+        }));
+        assert_eq!(app.settings.assistant.mail_accounts.len(), 1);
+        assert!(app.assistant_rows().iter().any(|row| row.text == "Gmail"));
+        app.act(Action::RemoveMailAccount(0));
+        assert!(app.settings.assistant.mail_accounts.is_empty());
+        assert!(!app.settings.assistant.see_screen);
+        app.act(Action::Toggle(Setting::AssistantSeeScreen));
+        assert!(app.settings.assistant.see_screen);
+        assert!(app.job_for("x", Route::ChatGpt, false).policy.see_screen);
     }
 
     #[test]

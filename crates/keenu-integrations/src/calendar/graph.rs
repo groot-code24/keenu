@@ -35,6 +35,15 @@ pub fn provider() -> Option<Provider> {
     })
 }
 
+/// The same registration, for the assistant to use the user's Outlook mail: reading, drafting and sending.
+pub fn mail_provider() -> Option<Provider> {
+    provider().map(|registered| Provider {
+        name: "Outlook mail",
+        scopes: "offline_access User.Read Mail.ReadWrite Mail.Send",
+        ..registered
+    })
+}
+
 /// One Microsoft account.
 pub struct Graph {
     tokens: TokenSource,

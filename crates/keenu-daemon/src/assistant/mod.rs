@@ -792,6 +792,16 @@ impl Session {
              - top_processes: the apps using the most CPU and memory right now; use it when the computer is \
              slow or hot, then offer to close the heavy ones\n\
              - chrome_profiles: Chrome's profiles, with each one's folder, name and account\n\
+             - plan {{title, goal, steps: [{{do, uses}}], score, chance, issues, risks, improvements}}: make a \
+             plan whenever the user asks you to plan something, and before any task of more than three steps. \
+             uses is the action or tool a step takes (open_app, run…); score is your honest 0-100 for the plan, \
+             chance your honest 0-100 estimate that every step works. Keenu adds what this computer's record says \
+             and keeps the plan as a document. Tell the user the score, both chances and the main risk, then do \
+             the steps yourself, marking each with plan_step {{step, status: done | failed | skipped, note}}\n\
+             - note_add {{title, text}}, notes_list, notes_search {{query}}, note_read {{title}}: the user's \
+             notes, in ~/Documents/Keenu Notes. Take notes as asked, in their words; keep summaries as notes\n\
+             - read_page {{url}}: a web page's words and links (https only); follow its links with read_page to \
+             browse. To search the web, read https://html.duckduckgo.com/html/?q=words\n\
              Search again with other terms or places when nothing fits; once found, act on it (reveal_file, \
              open_file, open_folder, chrome_profile) and say where it is. Never tell them to search themselves.\n\
              - check {{command}}: a command that only looks, run at once with its output returned to you; give \
@@ -845,7 +855,8 @@ impl Session {
              check (looking, at once) and run (changing, once the user approves), so you can find out anything \
              about this computer, install, update and fix things; never tell the user to do it themselves in a \
              terminal when run can, and never say a look was not allowed. Never guess this computer's state: \
-             check it. Take as many steps as the request needs; you have up to a dozen.\n\
+             check it. Take as many steps as the request needs; you have up to a dozen, and forty once a plan \
+             is under way.\n\
              To install, update or remove software, go step by step: check what is there first, everywhere it \
              could be (command -v, the system's package manager, flatpak list, snap list; the ways to install \
              are in what Keenu knows), and if it is installed already just say so; when unsure of the right way or \

@@ -35,6 +35,20 @@ and [the plan](docs/assistant-plan.md).
 - New commands: `--windows-list`, `--window-read`, `--window-click`, `--window-type`, `--window-keys`,
   `--window-close`, `--assistant-log`, and `--system` to try one of the assistant's system actions without the AI.
 
+- Plans: say "plan…" (or give a bigger task) and Keenu makes a plan with its steps, the AI's score and chance,
+  issues, how it could fail and how to improve it, beside the chance and failure rate from this computer's own action
+  log. It keeps the plan as a document in Documents/Keenu Plans, carries it out step by step and marks each step off.
+- Notes: Keenu takes notes in Documents/Keenu Notes, and finds and reads them back.
+- Browsing: Keenu reads web pages and follows their links.
+- Seeing and using the screen (Windows, macOS): a picture of the screen for the AI, after you allow it, and clicking,
+  scrolling and dragging where it points, each asking first. "See the screen without asking" in Settings skips the
+  question for looking only.
+- WhatsApp and Telegram (Windows, macOS): opens the chat with the message written in and sends it, after you allow it.
+- Mail (Windows, macOS): connect Gmail or Outlook under Settings → Assistant → Mail; the assistant searches, reads and
+  drafts, and sends after asking. Needs your own OAuth client, as calendars do.
+- "Keep the conversation going": after a spoken answer Keenu listens for your reply, until you say nothing or thanks.
+- macOS: windows on halves and quarters of the screen, side by side, and minimized.
+
 ### Fixed (on the branch)
 
 - An answer read aloud left Keenu marked as speaking for good, so it never listened for the reply to a question.

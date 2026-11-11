@@ -38,6 +38,17 @@ pub fn provider() -> Option<Provider> {
     })
 }
 
+/// The same registration, for the assistant to use the user's Gmail: reading, drafting and sending, never deleting
+/// for good. Google treats this as a restricted scope: an OAuth client of one's own, in testing with oneself as a test
+/// user, works; see `docs/calendar-setup.md`.
+pub fn mail_provider() -> Option<Provider> {
+    provider().map(|registered| Provider {
+        name: "Gmail",
+        scopes: "https://www.googleapis.com/auth/gmail.modify",
+        ..registered
+    })
+}
+
 /// Tells Google to withdraw the access, for when the user removes the account.
 pub fn revoke(token: &str) -> Result<(), CalendarError> {
     let body = http::form(&[("token", token)]);

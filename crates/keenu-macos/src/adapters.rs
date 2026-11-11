@@ -10,9 +10,10 @@ use std::process::Command;
 use keenu_platform::{
     Adjust, AppControlProvider, AudioDevice, Availability, ClipboardContent, ClipboardProvider,
     FileShelfProvider, KeyCombo, MediaCommand, MediaProvider, MediaSession, Monitor,
-    MonitorProvider, NOT_HERE, NativeNotification, NotificationProvider, PlaybackState, Power,
-    Recording, Report, Result, SECRET_FIELD, SystemCommand, UiElement, UpdateProvider,
-    UsageProvider, VoiceProvider, WindowInfo, WindowLifecycleProvider, holds, pick_element,
+    MonitorProvider, NOT_HERE, NativeNotification, NotificationProvider, PlaybackState,
+    PointerAction, Power, Recording, Report, Result, SECRET_FIELD, ScreenPicture, SystemCommand,
+    UiElement, UpdateProvider, UsageProvider, VoiceProvider, WindowInfo, WindowLifecycleProvider,
+    holds, pick_element,
 };
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSScreen, NSWorkspace};
@@ -33,6 +34,186 @@ fn osascript(script: &str) -> Result<String> {
 /// `text` as an AppleScript string.
 fn quoted(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Runs JavaScript for Automation, which reaches CoreGraphics and AppKit. Scripts here are built from numbers only.
+fn jxa(script: &str) -> Result<String> {
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .output()
+        .map_err(|err| format!("Could not run osascript: {err}"))?;
+    if !output.status.success() {
+        let why = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(
+            if why.contains("not allowed") || why.contains("1002") || why.contains("-1719") {
+                "Keenu needs permission: System Settings > Privacy & Security > Accessibility."
+                    .to_owned()
+            } else {
+                why
+            },
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// A rectangle on the screen in points, from the top left of the main display: x, y, width, height.
+type Rect = (i64, i64, i64, i64);
+
+/// The main display's area that windows may use (below the menu bar, beside the Dock), in points from its top left.
+fn usable_area() -> Result<Rect> {
+    let said = jxa(
+        "ObjC.import('AppKit'); var s = $.NSScreen.mainScreen; var f = s.frame; var v = s.visibleFrame; \
+         [v.origin.x, f.size.height - v.origin.y - v.size.height, v.size.width, v.size.height].join(' ')",
+    )?;
+    let numbers: Vec<i64> = said
+        .split_whitespace()
+        .filter_map(|n| n.parse::<f64>().ok())
+        .map(|n| n.round() as i64)
+        .collect();
+    match numbers[..] {
+        [x, y, w, h] if w > 0 && h > 0 => Ok((x, y, w, h)),
+        _ => Err("macOS would not say how large the screen is.".into()),
+    }
+}
+
+/// Where `part` of `area` is: `left` is its left half, `top_left` its top-left quarter, `maximize` all of it.
+fn part_of(area: Rect, part: &str) -> Option<Rect> {
+    let (x, y, w, h) = area;
+    let (half_w, half_h) = (w / 2, h / 2);
+    Some(match part {
+        "maximize" => area,
+        "left" => (x, y, half_w, h),
+        "right" => (x + half_w, y, w - half_w, h),
+        "top" => (x, y, w, half_h),
+        "bottom" => (x, y + half_h, w, h - half_h),
+        "top_left" => (x, y, half_w, half_h),
+        "top_right" => (x + half_w, y, w - half_w, half_h),
+        "bottom_left" => (x, y + half_h, half_w, h - half_h),
+        "bottom_right" => (x + half_w, y + half_h, w - half_w, h - half_h),
+        "center" | "unmaximize" => (x + w / 6, y + h / 6, w * 2 / 3, h * 2 / 3),
+        _ => return None,
+    })
+}
+
+/// `count` places side by side over `area` in `layout`: halves, rows, thirds, quarters or a grid.
+fn tiles(area: Rect, layout: &str, count: usize) -> Vec<Rect> {
+    let (x, y, w, h) = area;
+    let (columns, rows) = match layout {
+        "rows" => (1, count.clamp(1, 4)),
+        "thirds" => (3, 1),
+        "quarters" => (2, 2),
+        "grid" => {
+            let columns = (count as f64).sqrt().ceil().max(1.0) as usize;
+            (columns, count.div_ceil(columns).max(1))
+        }
+        _ => (count.clamp(1, 4), 1),
+    };
+    let (columns, rows) = (columns as i64, rows as i64);
+    (0..columns * rows)
+        .take(count)
+        .map(|index| {
+            let (column, row) = (index % columns, index / columns);
+            let left = x + w * column / columns;
+            let top = y + h * row / rows;
+            (
+                left,
+                top,
+                x + w * (column + 1) / columns - left,
+                y + h * (row + 1) / rows - top,
+            )
+        })
+        .collect()
+}
+
+/// Puts the front window of the app behind `window` at `place`.
+fn place(window: &str, place: Rect) -> Result<String> {
+    let clause = app_clause(window)?;
+    let (x, y, w, h) = place;
+    system_events(&format!(
+        "tell {clause}\nset value of attribute \"AXMinimized\" of window 1 to false\nset position of window 1 to {{{x}, {y}}}\nset size of window 1 to {{{w}, {h}}}\nend tell"
+    ))?;
+    Ok(format!("Moved {window}."))
+}
+
+/// The mouse at a place on the screen, in points, through CoreGraphics' events.
+fn pointer(x: i32, y: i32, action: PointerAction) -> Result<String> {
+    // Event types: 1/2 left down/up, 3/4 right down/up, 5 moved, 6 left dragged. Field 1 is the click count.
+    let body = match action {
+        PointerAction::Move => format!("post(5, {x}, {y}, 0, 0);"),
+        PointerAction::Click => {
+            format!("post(5, {x}, {y}, 0, 0); post(1, {x}, {y}, 0, 1); post(2, {x}, {y}, 0, 1);")
+        }
+        PointerAction::DoubleClick => format!(
+            "post(5, {x}, {y}, 0, 0); post(1, {x}, {y}, 0, 1); post(2, {x}, {y}, 0, 1); post(1, {x}, {y}, 0, 2); post(2, {x}, {y}, 0, 2);"
+        ),
+        PointerAction::RightClick => {
+            format!("post(5, {x}, {y}, 0, 0); post(3, {x}, {y}, 1, 1); post(4, {x}, {y}, 1, 1);")
+        }
+        PointerAction::Scroll(notches) => format!(
+            "post(5, {x}, {y}, 0, 0); $.CGEventPost(0, $.CGEventCreateScrollWheelEvent2(null, 1, 1, {notches}, 0, 0));"
+        ),
+        PointerAction::DragTo(to_x, to_y) => format!(
+            "post(5, {x}, {y}, 0, 0); post(1, {x}, {y}, 0, 1); for (var i = 1; i <= 10; i++) {{ post(6, {x} + ({to_x} - {x}) * i / 10, {y} + ({to_y} - {y}) * i / 10, 0, 0); }} post(2, {to_x}, {to_y}, 0, 1);"
+        ),
+    };
+    jxa(&format!(
+        "ObjC.import('CoreGraphics'); function post(t, x, y, b, clicks) {{ var e = $.CGEventCreateMouseEvent(null, t, {{x: x, y: y}}, b); if (clicks) {{ $.CGEventSetIntegerValueField(e, 1, clicks); }} $.CGEventPost(0, e); delay(0.03); }} {body}"
+    ))?;
+    Ok(match action {
+        PointerAction::Move => format!("The pointer is at {x}, {y}."),
+        PointerAction::Click => format!("Clicked at {x}, {y}."),
+        PointerAction::DoubleClick => format!("Double-clicked at {x}, {y}."),
+        PointerAction::RightClick => format!("Right-clicked at {x}, {y}."),
+        PointerAction::Scroll(_) => format!("Scrolled at {x}, {y}."),
+        PointerAction::DragTo(to_x, to_y) => format!("Dragged from {x}, {y} to {to_x}, {to_y}."),
+    })
+}
+
+/// A PNG's size, from its header.
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    if png.len() < 24 || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    Some((
+        u32::from_be_bytes(png[16..20].try_into().ok()?),
+        u32::from_be_bytes(png[20..24].try_into().ok()?),
+    ))
+}
+
+/// A picture of the main display, made smaller with `sips`; the file goes as soon as it is read.
+fn capture() -> Result<ScreenPicture> {
+    let file = std::env::temp_dir().join(format!("keenu-screen-{}.png", std::process::id()));
+    let path = file.to_string_lossy().into_owned();
+    let made =
+        output("/usr/sbin/screencapture", &["-x", "-m", "-t", "png", &path]).and_then(|_| {
+            output(
+                "/usr/bin/sips",
+                &["-Z", &keenu_platform::PICTURE_WIDTH.to_string(), &path],
+            )
+        });
+    let png = made.and_then(|_| std::fs::read(&file).map_err(|err| err.to_string()));
+    let _ = std::fs::remove_file(&file);
+    let png = png.map_err(|why| {
+        format!("macOS would not picture the screen ({why}). Keenu needs Screen Recording: System Settings > Privacy & Security.")
+    })?;
+    let (width, height) = png_size(&png).ok_or("The picture of the screen was not a PNG.")?;
+    let bounds = jxa(
+        "ObjC.import('CoreGraphics'); var b = $.CGDisplayBounds($.CGMainDisplayID()); b.size.width + ' ' + b.size.height",
+    )?;
+    let size: Vec<i32> = bounds
+        .split_whitespace()
+        .filter_map(|n| n.parse::<f64>().ok())
+        .map(|n| n.round() as i32)
+        .collect();
+    let [wide, high] = size[..] else {
+        return Err("macOS would not say how large the screen is.".into());
+    };
+    Ok(ScreenPicture {
+        png,
+        width,
+        height,
+        screen: (0, 0, wide, high),
+    })
 }
 
 /// The apps with a scripting interface for what is playing.
@@ -764,9 +945,58 @@ return out"#;
             SystemCommand::Window { window, command } if command == "close" => self
                 .close_window(window)
                 .map(|()| "Asked it to close.".to_owned()),
-            // No public way to set them from another program: brightness, Bluetooth, tiling windows.
+            SystemCommand::Window { window, command } if command == "minimize" => {
+                let clause = app_clause(window)?;
+                system_events(&format!(
+                    "tell {clause} to set value of attribute \"AXMinimized\" of window 1 to true"
+                ))
+                .map(|_| "Minimized.".to_owned())
+            }
+            SystemCommand::Window { window, command } => {
+                let area = part_of(usable_area()?, command).ok_or(NOT_HERE)?;
+                place(window, area)
+            }
+            SystemCommand::Arrange { layout, apps } => {
+                let names: Vec<String> = if apps.is_empty() {
+                    self.windows()?
+                        .into_iter()
+                        .map(|w| w.app)
+                        .filter(|app| !app.to_lowercase().contains("keenu"))
+                        .fold(Vec::new(), |mut seen, app| {
+                            if !seen.contains(&app) {
+                                seen.push(app);
+                            }
+                            seen
+                        })
+                        .into_iter()
+                        .take(4)
+                        .collect()
+                } else {
+                    apps.clone()
+                };
+                if names.is_empty() {
+                    return Err("There are no windows to arrange.".into());
+                }
+                let places = tiles(usable_area()?, layout, names.len());
+                let mut moved = Vec::new();
+                for (name, area) in names.iter().zip(places) {
+                    match place(name, area) {
+                        Ok(_) => moved.push(name.clone()),
+                        Err(why) => {
+                            return Err(format!("Arranged {} of them; {name}: {why}", moved.len()));
+                        }
+                    }
+                }
+                Ok(format!("Arranged {}.", moved.join(", ")))
+            }
+            SystemCommand::Pointer { x, y, action } => pointer(*x, *y, *action),
+            // No public way to set them from another program: brightness and Bluetooth.
             _ => Err(NOT_HERE.into()),
         }
+    }
+
+    fn capture_screen(&self) -> Result<ScreenPicture> {
+        capture()
     }
 
     fn report(&self, report: Report) -> Result<String> {
@@ -846,5 +1076,41 @@ fn settings_page(panel: &str) -> &'static str {
         "keyboard" => "com.apple.Keyboard-Settings.extension",
         "update" => "com.apple.Software-Update-Settings.extension",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SCREEN: Rect = (0, 25, 1440, 875);
+
+    #[test]
+    fn a_part_of_the_screen_is_where_people_mean() {
+        assert_eq!(part_of(SCREEN, "left"), Some((0, 25, 720, 875)));
+        assert_eq!(part_of(SCREEN, "bottom_right"), Some((720, 462, 720, 438)));
+        assert_eq!(part_of(SCREEN, "maximize"), Some(SCREEN));
+        assert_eq!(part_of(SCREEN, "upside"), None);
+    }
+
+    #[test]
+    fn tiles_cover_the_screen_without_gaps() {
+        let quarters = tiles(SCREEN, "quarters", 4);
+        assert_eq!(quarters.len(), 4);
+        assert_eq!(quarters[3], (720, 462, 720, 438));
+        let halves = tiles(SCREEN, "halves", 2);
+        assert_eq!(halves[0].2 + halves[1].2, 1440);
+        let grid = tiles(SCREEN, "grid", 5);
+        assert_eq!(grid.len(), 5);
+        assert_eq!(grid[0].2, 480);
+    }
+
+    #[test]
+    fn a_png_says_its_size() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&1600u32.to_be_bytes());
+        png.extend_from_slice(&1000u32.to_be_bytes());
+        assert_eq!(png_size(&png), Some((1600, 1000)));
+        assert_eq!(png_size(b"GIF89a"), None);
     }
 }

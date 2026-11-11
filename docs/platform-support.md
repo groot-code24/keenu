@@ -73,7 +73,7 @@ Official Windows releases are built with MSVC by CI. The real desktop runs above
 | Claude Code, Codex, Grok as the AI | **Not run** with the real programs | Existing | **Not run** |
 | Spoken answers, and stopping them | Compiles; needs a person | Existing | Compiles; needs a person |
 | Wake words: "Keenu", "Hey Keenu", "Hi/Hello/OK Keenu", "Good morning/afternoon/evening Keenu", with or without the request in the same breath | Compiles; needs a person with a microphone and a Windows speech language. How well Windows' engine hears "Keenu" is not known | Not yet | Not yet |
-| Windows on the screen: minimize, maximize, halves, quarters, side by side | Smoke test puts a real window on the left half; tiling several is unit-tested only | keenud, existing | Focus and close only |
+| Windows on the screen: minimize, maximize, halves, quarters, side by side | Smoke test puts a real window on the left half; tiling several is unit-tested only | keenud, existing | Compiles; needs Accessibility |
 | Volume | Compiles; CI's machine has no sound device | keenud, existing | Compiles |
 | Brightness | Compiles; works only where the display lets Windows set it (most laptop screens) | keenud, existing | **Not supported**: no public way |
 | Wi-Fi and Bluetooth on and off | Compiles; needs a person. Windows may refuse desktop programs: then Keenu says so | keenud, existing | Wi-Fi compiles; Bluetooth **not supported** |
@@ -89,6 +89,15 @@ Official Windows releases are built with MSVC by CI. The real desktop runs above
 | Morning briefing, tasks | Unit-tested | Not yet | Unit-tested |
 | MCP connectors | Mock-tested against a fake server over HTTP | Not yet | Mock-tested |
 | Web search through xAI | Mock-tested. **Never tried with a real key** | Not yet | As Windows |
+| Plans: steps, the AI's score and chance, issues, risks, improvements; the chance and failure rate from this computer's action log; a document per plan; steps marked off | Unit- and mock-tested | Unit-tested; the record has no outcomes yet, as keenud logs approvals only, so it says there is none | As Windows |
+| Notes in Documents/Keenu Notes: add, list, search, read | Unit-tested | Unit-tested | Unit-tested |
+| Reading web pages and following their links (https, never the local network) | HTML reading unit-tested; **not run against real sites in CI** | As Windows | As Windows |
+| Seeing the screen: a picture to the AI connected (ChatGPT or an API), or a file for an AI in its own program | Picture unit-tested on CI's real desktop; sending it mock-tested. **Not tried with a real AI** | **Not yet**: keenud has no approval card for it | Compiles; needs Screen Recording, which CI cannot give |
+| Clicking, scrolling and dragging at a place in that picture | Compiles; mapping unit-tested. **Needs a person** | **Not yet** | Compiles; needs Accessibility |
+| WhatsApp and Telegram: open the chat with the message written in, then send | Compiles; mock-tested without the apps. **Not tried with the real apps** | **Not yet** | As Windows |
+| Gmail and Outlook mail: search, read, draft, send (sending asks) | Message building unit-tested; **never tried with a real account**, which needs your own OAuth client (docs/calendar-setup.md) | **Not yet**: GNOME Online Accounts would be the way | As Windows |
+| Keep the conversation going after a spoken answer | Unit-tested; needs a person | Existing listen-again only | As Windows |
+| Window tiling | See above | keenud, existing | Halves, quarters, side by side, minimize: compiles; needs Accessibility |
 
 ## Limits that are the system's
 

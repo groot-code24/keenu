@@ -621,6 +621,10 @@ impl AppControlProvider for AppControl {
     fn report(&self, report: keenu_platform::Report) -> Result<String> {
         crate::machine::report(report)
     }
+
+    fn capture_screen(&self) -> Result<keenu_platform::ScreenPicture> {
+        crate::machine::capture()
+    }
 }
 
 #[cfg(test)]

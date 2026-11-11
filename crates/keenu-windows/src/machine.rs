@@ -9,7 +9,8 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use keenu_platform::{
-    Adjust, ClipboardContent, ClipboardProvider, Power, Report, Result, SystemCommand, holds,
+    Adjust, ClipboardContent, ClipboardProvider, PICTURE_WIDTH, PointerAction, Power, Report,
+    Result, ScreenPicture, SystemCommand, holds,
 };
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, RECT, WPARAM};
@@ -24,14 +25,16 @@ use windows::Win32::System::Power::SetSuspendState;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_DWORD, RegSetKeyValueW};
 use windows::Win32::System::Shutdown::LockWorkStation;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, SendInput, VIRTUAL_KEY, VK_RETURN,
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
+    KEYEVENTF_UNICODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
+    VIRTUAL_KEY, VK_RETURN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, HWND_BROADCAST, IsIconic, IsZoomed, PostMessageW, SM_CXVIRTUALSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SMTO_ABORTIFHUNG, SW_MAXIMIZE,
-    SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetWindowPos,
-    ShowWindow, WM_CLOSE, WM_SETTINGCHANGE,
+    SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetCursorPos,
+    SetWindowPos, ShowWindow, WM_CLOSE, WM_SETTINGCHANGE,
 };
 use windows_core::{BOOL, Interface, w};
 
@@ -500,9 +503,10 @@ fn pictures_folder() -> PathBuf {
         .join("Screenshots")
 }
 
-fn screenshot() -> Result<String> {
+/// The whole screen, every display, and where it is.
+fn grab() -> Result<(Area, image::RgbaImage)> {
     // SAFETY: every object made here is released before returning, and the pixel buffer is the size asked for.
-    let (width, height, pixels) = unsafe {
+    let (area, width, height, pixels) = unsafe {
         let (x, y) = (
             GetSystemMetrics(SM_XVIRTUALSCREEN),
             GetSystemMetrics(SM_YVIRTUALSCREEN),
@@ -550,7 +554,17 @@ fn screenshot() -> Result<String> {
         if copied.is_err() || rows == 0 {
             return Err("Windows would not copy the screen.".into());
         }
-        (width as u32, height as u32, pixels)
+        (
+            Area {
+                x,
+                y,
+                w: width,
+                h: height,
+            },
+            width as u32,
+            height as u32,
+            pixels,
+        )
     };
     let mut pixels = pixels;
     for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -559,6 +573,113 @@ fn screenshot() -> Result<String> {
     }
     let picture = image::RgbaImage::from_raw(width, height, pixels)
         .ok_or("Windows gave a picture of the wrong size.")?;
+    Ok((area, picture))
+}
+
+/// A picture of the screen for the assistant, made smaller to send; kept in memory only.
+pub fn capture() -> Result<ScreenPicture> {
+    let (area, picture) = grab()?;
+    let picture = if picture.width() > PICTURE_WIDTH {
+        let height = (u64::from(picture.height()) * u64::from(PICTURE_WIDTH)
+            / u64::from(picture.width()))
+        .max(1) as u32;
+        image::imageops::resize(
+            &picture,
+            PICTURE_WIDTH,
+            height,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        picture
+    };
+    let mut png = Vec::new();
+    picture
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|err| format!("Could not make the picture: {err}"))?;
+    Ok(ScreenPicture {
+        png,
+        width: picture.width(),
+        height: picture.height(),
+        screen: (area.x, area.y, area.w, area.h),
+    })
+}
+
+fn mouse(flags: MOUSE_EVENT_FLAGS, data: i32) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: data as u32,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn send_mouse(inputs: &[INPUT]) -> Result<()> {
+    // SAFETY: the slice and the size go together.
+    let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
+    if sent as usize == inputs.len() {
+        Ok(())
+    } else {
+        Err("Windows did not take the mouse input; something may be blocking it.".into())
+    }
+}
+
+fn move_to(x: i32, y: i32) -> Result<()> {
+    // SAFETY: only moves the pointer, in the same coordinates the screen was pictured in.
+    unsafe { SetCursorPos(x, y) }
+        .map_err(|err| format!("Windows would not move the pointer: {err}"))
+}
+
+/// The mouse at a place on the screen.
+fn pointer(x: i32, y: i32, action: PointerAction) -> Result<String> {
+    move_to(x, y)?;
+    let press = |down, up| [mouse(down, 0), mouse(up, 0)];
+    match action {
+        PointerAction::Move => Ok(format!("The pointer is at {x}, {y}.")),
+        PointerAction::Click => send_mouse(&press(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))
+            .map(|()| format!("Clicked at {x}, {y}.")),
+        PointerAction::DoubleClick => {
+            send_mouse(&press(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))?;
+            send_mouse(&press(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))
+                .map(|()| format!("Double-clicked at {x}, {y}."))
+        }
+        PointerAction::RightClick => send_mouse(&press(MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP))
+            .map(|()| format!("Right-clicked at {x}, {y}.")),
+        PointerAction::Scroll(notches) => {
+            send_mouse(&[mouse(MOUSEEVENTF_WHEEL, notches.saturating_mul(120))]).map(|()| {
+                format!(
+                    "Scrolled {} at {x}, {y}.",
+                    if notches > 0 { "up" } else { "down" }
+                )
+            })
+        }
+        PointerAction::DragTo(to_x, to_y) => {
+            send_mouse(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
+            let mut moved = Ok(());
+            for step in 1..=10 {
+                moved = move_to(x + (to_x - x) * step / 10, y + (to_y - y) * step / 10);
+                if moved.is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            // The button is let go whatever happened, so it is never left held down.
+            let released = send_mouse(&[mouse(MOUSEEVENTF_LEFTUP, 0)]);
+            moved
+                .and(released)
+                .map(|()| format!("Dragged from {x}, {y} to {to_x}, {to_y}."))
+        }
+    }
+}
+
+fn screenshot() -> Result<String> {
+    let (_, picture) = grab()?;
     let folder = pictures_folder();
     std::fs::create_dir_all(&folder)
         .map_err(|err| format!("Could not make {}: {err}", folder.display()))?;
@@ -693,6 +814,7 @@ pub fn run(command: &SystemCommand) -> Result<String> {
         SystemCommand::Copy(text) => crate::clipboard::Clipboard
             .write(&ClipboardContent::Text(text.clone()))
             .map(|()| "Copied.".to_owned()),
+        SystemCommand::Pointer { x, y, action } => pointer(*x, *y, *action),
     }
 }
 
@@ -798,6 +920,20 @@ mod tests {
         assert_eq!(settings_page("wifi"), "network-wifi");
         assert_eq!(settings_page("dnd"), "notifications");
         assert_eq!(settings_page("anything else"), "");
+    }
+
+    #[test]
+    fn a_picture_for_the_assistant_is_a_small_png_of_the_whole_screen() {
+        let picture = capture().unwrap();
+        assert!(picture.width > 0 && picture.width <= PICTURE_WIDTH);
+        assert!(picture.png.starts_with(b"\x89PNG"));
+        let (_, _, wide, high) = picture.screen;
+        assert!(wide >= picture.width as i32 && high > 0);
+        // Its corners are on the screen.
+        assert_eq!(
+            picture.to_screen(0, 0),
+            Some((picture.screen.0, picture.screen.1))
+        );
     }
 
     #[test]

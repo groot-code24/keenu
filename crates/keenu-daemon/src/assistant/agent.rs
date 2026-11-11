@@ -26,7 +26,36 @@ const TOOLS: &[&str] = &[
     "top_processes",
     "chrome_profiles",
     "check",
+    "plan",
+    "plan_step",
+    "note_add",
+    "notes_list",
+    "notes_search",
+    "note_read",
+    "read_page",
 ];
+
+/// Where plans are kept, and their documents.
+fn plans() -> keenu_assistant::plan::Plans {
+    keenu_assistant::plan::Plans::new(
+        crate::store::data_dir().join("plans.json"),
+        documents().join("Keenu Plans"),
+    )
+}
+
+/// The user's notes.
+fn notes() -> keenu_assistant::notes::Notes {
+    keenu_assistant::notes::Notes::new(documents().join("Keenu Notes"))
+}
+
+fn documents() -> PathBuf {
+    dirs::document_dir().unwrap_or_else(|| home().join("Documents"))
+}
+
+/// The plan under way, for each request; empty when there is none.
+pub fn plan_for_prompt() -> String {
+    plans().for_prompt()
+}
 
 /// One of `TOOLS`.
 fn is_tool(action: &Value) -> bool {
@@ -69,6 +98,11 @@ fn describe(call: &Value) -> String {
         Some("top_processes") => "Checking what’s using the computer…".into(),
         Some("check") => check_words(call["command"].as_str().unwrap_or_default()).into(),
         Some("chrome_profiles") => "Looking at Chrome’s profiles…".into(),
+        Some("plan") => format!("Planning “{}”…", call["title"].as_str().unwrap_or("it")),
+        Some("plan_step") => "Marking off a step…".into(),
+        Some("note_add") => "Writing it down…".into(),
+        Some("notes_list" | "notes_search" | "note_read") => "Looking in your notes…".into(),
+        Some("read_page") => "Reading the page…".into(),
         _ => "Working…".into(),
     }
 }
@@ -121,13 +155,25 @@ fn strings(value: &Value) -> Vec<String> {
 }
 
 /// Runs one tool, off the async threads, and returns its result as text for the AI.
-async fn run(call: Value) -> String {
+async fn run(call: Value, log: ActionLog) -> String {
     if call["type"] == "check" {
         return check::run(call["command"].as_str().unwrap_or_default()).await;
     }
-    tokio::task::spawn_blocking(move || run_now(&call, &home()))
-        .await
-        .unwrap_or_else(|err| format!("the search failed: {err}"))
+    tokio::task::spawn_blocking(move || {
+        let text = |key: &str| call[key].as_str().unwrap_or_default().to_owned();
+        match call["type"].as_str() {
+            Some("plan") => plans().make(&call, &log, crate::clock::now_ms()),
+            Some("plan_step") => plans().step(&call),
+            Some("note_add") => notes().add(&text("title"), &text("text"), chrono::Local::now()),
+            Some("notes_list") => notes().list(),
+            Some("notes_search") => notes().search(&text("query")),
+            Some("note_read") => notes().read(&text("title")),
+            Some("read_page") => keenu_assistant::page::read_page(&text("url")),
+            _ => run_now(&call, &home()),
+        }
+    })
+    .await
+    .unwrap_or_else(|err| format!("the search failed: {err}"))
 }
 
 /// The file and app tools, blocking.
@@ -181,7 +227,7 @@ impl Toolbox for LinuxTools {
     }
 
     async fn run(&self, call: Value) -> String {
-        run(call).await
+        run(call, self.log.clone()).await
     }
 
     async fn run_command(
@@ -205,6 +251,7 @@ impl Toolbox for LinuxTools {
             at_ms: crate::clock::now_ms(),
             request: String::new(),
             level: level_of(action),
+            kind: action["type"].as_str().unwrap_or_default().to_owned(),
             action: keenu_guard::describe(action),
             outcome: if refused.is_some() {
                 Outcome::Refused
