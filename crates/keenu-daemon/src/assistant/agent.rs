@@ -52,11 +52,6 @@ fn documents() -> PathBuf {
     dirs::document_dir().unwrap_or_else(|| home().join("Documents"))
 }
 
-/// The plan under way, for each request; empty when there is none.
-pub fn plan_for_prompt() -> String {
-    plans().for_prompt()
-}
-
 /// One of `TOOLS`.
 fn is_tool(action: &Value) -> bool {
     action["type"]
