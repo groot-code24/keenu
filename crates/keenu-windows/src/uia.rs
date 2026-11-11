@@ -15,7 +15,7 @@ use windows_core::{
     BOOL, BSTR, GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, Result, interface,
 };
 
-pub const CUIAutomation: GUID = GUID::from_u128(0xff48dba4_60ef_4201_aa87_54103eef594e);
+pub const CUI_AUTOMATION: GUID = GUID::from_u128(0xff48dba4_60ef_4201_aa87_54103eef594e);
 pub const TREE_SCOPE_DESCENDANTS: i32 = 4;
 pub const UIA_INVOKE_PATTERN: i32 = 10000;
 pub const UIA_VALUE_PATTERN: i32 = 10002;

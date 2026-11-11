@@ -451,7 +451,7 @@ mod tests {
         let init = (200, rpc(r#"{"protocolVersion":"2025-06-18"}"#));
         let notified = (202, String::new());
         let tools = (200, r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search","description":"Finds pages","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},{"name":"delete","inputSchema":{}}]}}"#.to_owned());
-        let called = (200, r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"found: token=abc123"}]}}"#.to_owned());
+        let called = (200, r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"found: api_key=abc123"}]}}"#.to_owned());
         let (url, asked) = serve(vec![init, notified, tools, called]);
         let connector = Connector {
             name: "N".into(),

@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows_core::{BOOL, PWSTR};
 
 use crate::uia::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+    CUI_AUTOMATION, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
     IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
     TREE_SCOPE_DESCENDANTS, UIA_INVOKE_PATTERN, UIA_SELECTION_ITEM_PATTERN, UIA_TOGGLE_PATTERN,
     UIA_VALUE_PATTERN,
@@ -60,7 +60,7 @@ impl Drop for ComScope {
 
 fn automation() -> Result<IUIAutomation> {
     // SAFETY: a plain COM instantiation on a thread with COM.
-    unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+    unsafe { CoCreateInstance(&CUI_AUTOMATION, None, CLSCTX_INPROC_SERVER) }
         .map_err(|err| format!("Windows' UI Automation is not available: {err}"))
 }
 
@@ -648,11 +648,10 @@ mod tests {
             name: "Password".into(),
             ..UiElement::default()
         };
-        assert_eq!(
+        assert!(
             pick_element(std::slice::from_ref(&secret), "password", "field")
                 .unwrap()
-                .secret,
-            true
+                .secret
         );
     }
 }

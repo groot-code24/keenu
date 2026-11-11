@@ -346,6 +346,8 @@ fn parse_result(result: &Value) -> anyhow::Result<Answer> {
 mod tests {
     use super::*;
 
+    // Dates a folder by opening it as a file, which Windows does not allow.
+    #[cfg(unix)]
     #[test]
     fn prunes_whole_conversations_last_used_before_today() {
         let store = std::env::temp_dir().join(format!("keenu-prune-{}", std::process::id()));
@@ -420,6 +422,8 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    // A link on Unix; Windows gets a copy instead (see `sign_in::link`).
+    #[cfg(unix)]
     #[test]
     fn shares_the_users_sign_in() {
         let root = std::env::temp_dir().join(format!("keenu-agy-login-{}", std::process::id()));

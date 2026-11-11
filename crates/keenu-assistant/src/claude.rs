@@ -408,8 +408,11 @@ mod tests {
         // Named after Keenu's own workspace, wherever its data folder is (XDG_DATA_HOME moves it).
         let workspace = keenu_core::paths::data_dir().join("assistant");
         assert!(
-            dir.to_string_lossy()
-                .ends_with(&*workspace.to_string_lossy().replace(['/', '.'], "-")),
+            dir.to_string_lossy().ends_with(
+                &*workspace
+                    .to_string_lossy()
+                    .replace(|c: char| !c.is_ascii_alphanumeric(), "-")
+            ),
             "{}",
             dir.display()
         );

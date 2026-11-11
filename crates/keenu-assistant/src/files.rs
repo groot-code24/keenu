@@ -222,7 +222,14 @@ pub fn find(terms: &[String], root: &Path, kind: Kind, home: &Path) -> String {
 fn shorten(path: &Path, home: &Path) -> String {
     match path.strip_prefix(home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
-        Ok(rest) => format!("~/{}", rest.display()),
+        // `/` between parts on every system, as the AI writes them back.
+        Ok(rest) => format!(
+            "~/{}",
+            rest.iter()
+                .map(|part| part.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        ),
         Err(_) => path.display().to_string(),
     }
 }

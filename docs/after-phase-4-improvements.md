@@ -6,7 +6,7 @@ phases are done, and why. Each item needs a yes before work starts.
 
 Sources: Keenu as it stands on the `assistant-phases` branch, and [Isle](https://github.com/zickrian/isle), the
 project Keenu is based on, read at its commit a29a7c4 (8 November 2026, after release 1.7.1). Keenu was taken from
-Isle 1.5.0; Isle has had five releases since (1.5.1, 1.5.2, 1.5.3, 1.6.0, 1.7.0, 1.7.1).
+Isle 1.5.0; Isle has had six releases since (1.5.1, 1.5.2, 1.5.3, 1.6.0, 1.7.0, 1.7.1).
 
 ## Where the two stand
 
