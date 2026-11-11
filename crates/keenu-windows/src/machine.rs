@@ -553,7 +553,7 @@ fn screenshot() -> Result<String> {
         (width as u32, height as u32, pixels)
     };
     let mut pixels = pixels;
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
         pixel[3] = 255;
     }
